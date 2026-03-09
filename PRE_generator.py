@@ -76,7 +76,7 @@ class PREGenerator:
         pre_q_ref = config.get('PRE_Q_REF', PRE_Q_REF)
         pre_gamma_base = config.get('PRE_GAMMA_BASE', PRE_GAMMA_BASE)
 
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], geo['p_start'], geo['p_end'], None, None) 
+        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
                          for i, geo in ARM_GEOMETRIES.items()}
 
         water_params = self.app._get_water_params()

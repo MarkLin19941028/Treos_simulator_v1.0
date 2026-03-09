@@ -411,6 +411,15 @@ class SimulationEngine:
             if not is_finished:
                 self.simulation_time_elapsed += dt
 
+        # 獲取當前製程的噴嘴流量資訊
+        current_flows = {1: 0.0, 2: 0.0, 3: 0.0}
+        if self.animation_state == STATE_RUNNING_PROCESS:
+            if self.active_arm_id == 1:
+                current_flows[1] = current_process.get('flow_rate', 0.0)
+            elif self.active_arm_id == 2:
+                current_flows[2] = current_process.get('flow_rate', 0.0)
+                current_flows[3] = current_process.get('flow_rate_2', 0.0)
+
         return {
             'time': self.simulation_time_elapsed,
             'state': self.animation_state,
@@ -424,6 +433,7 @@ class SimulationEngine:
             'step_str': self.current_step_label,
             'water_render': render_data,
             'is_spraying': (self.animation_state == STATE_RUNNING_PROCESS),
+            'nozzle_flows': current_flows,
             'removed_particles': [],
             'is_finished': is_finished
         }

@@ -145,7 +145,7 @@ class ChargingGenerator:
         
         # 2. 初始化模擬引擎
         # 為了獨立運作，我們需要自己的 SimulationEngine 來跑粒子軌跡
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], geo['p_start'], geo['p_end'], None, None) 
+        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
                          for i, geo in ARM_GEOMETRIES.items()}
         water_params = self.app._get_water_params() # 沿用主程式的水參數
         

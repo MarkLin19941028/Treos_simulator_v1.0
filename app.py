@@ -1151,8 +1151,7 @@ class SimulationApp:
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
         if total_duration <= 0: total_duration = 1.0
 
-        last_active_id = None
-        last_was_spraying = False
+        last_flows = {1: 0.0, 2: 0.0, 3: 0.0}
         last_ui_update_time = time.time()
 
         while True:
@@ -1170,43 +1169,76 @@ class SimulationApp:
                     except: pass
 
             curr_arm_id = snapshot['active_arm_id']
-            curr_spraying = snapshot['is_spraying']
+            curr_flows = snapshot.get('nozzle_flows', {1: 0.0, 2: 0.0, 3: 0.0})
 
-            if curr_arm_id != 0 and curr_spraying:
-                if not last_was_spraying or curr_arm_id != last_active_id:
-                    arm_trajectories[curr_arm_id].append([])
-                    if curr_arm_id == 2:
-                        arm_trajectories[3].append([]) # Nozzle 3 trajectory
-
-                nozzle_positions = snapshot['nozzle_pos'] # Might be a single array or a list of two arrays
-                
+            # 處理每個噴嘴的紀錄邏輯
+            if curr_arm_id != 0:
                 rad_wafer = math.radians(snapshot['wafer_angle'])
                 cos_a, sin_a = math.cos(-rad_wafer), math.sin(-rad_wafer)
                 inv_rot_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+                nozzle_positions = snapshot['nozzle_pos']
 
-                if isinstance(nozzle_positions, list):
-                    n1, n2 = nozzle_positions
-                    arm_trajectories[curr_arm_id][-1].append(np.dot(inv_rot_matrix, n1[:2]))
-                    arm_trajectories[3][-1].append(np.dot(inv_rot_matrix, n2[:2]))
-                else:
-                    arm_trajectories[curr_arm_id][-1].append(np.dot(inv_rot_matrix, nozzle_positions[:2]))
+                # Nozzle 1 (Arm 1)
+                if curr_arm_id == 1:
+                    flow = curr_flows[1]
+                    if flow > 0:
+                        if last_flows[1] <= 0:
+                            arm_trajectories[1].append([])
+                        arm_trajectories[1][-1].append(np.dot(inv_rot_matrix, nozzle_positions[:2]))
 
-            last_was_spraying = curr_spraying
-            last_active_id = curr_arm_id
+                # Nozzle 2 & 3 (Arm 2)
+                elif curr_arm_id == 2:
+                    if isinstance(nozzle_positions, list) and len(nozzle_positions) == 2:
+                        n2_pos, n3_pos = nozzle_positions
+                        
+                        # Nozzle 2
+                        flow2 = curr_flows[2]
+                        if flow2 > 0:
+                            if last_flows[2] <= 0:
+                                arm_trajectories[2].append([])
+                            arm_trajectories[2][-1].append(np.dot(inv_rot_matrix, n2_pos[:2]))
+                        
+                        # Nozzle 3
+                        flow3 = curr_flows[3]
+                        if flow3 > 0:
+                            if last_flows[3] <= 0:
+                                arm_trajectories[3].append([])
+                            arm_trajectories[3][-1].append(np.dot(inv_rot_matrix, n3_pos[:2]))
+
+            last_flows = curr_flows.copy()
             if snapshot.get('is_finished') or snapshot['time'] > (total_duration + 30.0): break
 
         arm_colors = {1: 'lime', 2: 'magenta', 3: 'yellow'}
         has_any_trajectory = False
+        
+        # 建立 Legend 用的 Handles
+        from matplotlib.lines import Line2D
+        legend_elements = []
+
         for arm_id, segments in arm_trajectories.items():
+            drawn_this_arm = False
             for segment in segments:
                 if segment:
                     has_any_trajectory = True
+                    drawn_this_arm = True
                     coords = np.array(segment)
                     ax.plot(coords[:, 0], coords[:, 1], color=arm_colors[arm_id], linewidth=NOZZLE_RADIUS_MM * 2, solid_capstyle='round', alpha=0.6, zorder=10)
+            
+            if drawn_this_arm:
+                label = f"Nozzle {arm_id}"
+                legend_elements.append(Line2D([0], [0], color=arm_colors[arm_id], lw=4, label=label))
+
+        if legend_elements:
+            ax.legend(handles=legend_elements, loc='upper right', facecolor='#222222', edgecolor='gray', labelcolor='white', fontsize=9)
 
         if has_any_trajectory:
+            # 取得最後一個有效的噴嘴位置作標記
             final_pos = snapshot['nozzle_pos']
-            ax.plot(final_pos[0], final_pos[1], 'o', color='yellow', markersize=4, zorder=15)
+            if isinstance(final_pos, list):
+                for p in final_pos:
+                    ax.plot(p[0], p[1], 'o', color='white', markersize=4, zorder=15)
+            else:
+                ax.plot(final_pos[0], final_pos[1], 'o', color='white', markersize=4, zorder=15)
 
         fig.savefig(filepath, bbox_inches='tight', dpi=100)
         plt.close(fig)
@@ -1280,8 +1312,35 @@ class SimulationApp:
                         except: pass
 
                 nozzle_pos = snapshot['nozzle_pos']
-                main_nozzle_pos = nozzle_pos[0] if isinstance(nozzle_pos, list) else nozzle_pos
                 
+                # Initialize nozzle data
+                n1_pos_str, n1_rad_str = 'N/A', 'N/A'
+                n2_pos_str, n2_rad_str = 'N/A', 'N/A'
+                n3_pos_str, n3_rad_str = 'N/A', 'N/A'
+                
+                active_arm = snapshot['active_arm_id']
+                if active_arm == 1:
+                    # Arm 1 contains Nozzle 1
+                    pos = nozzle_pos
+                    rad = np.linalg.norm(pos)
+                    n1_pos_str = f"({pos[0]:.3f}, {pos[1]:.3f})"
+                    n1_rad_str = f"{rad:.3f}"
+                elif active_arm == 2:
+                    # Arm 2 contains Nozzle 2 (main) and Nozzle 3 (side)
+                    if isinstance(nozzle_pos, list) and len(nozzle_pos) == 2:
+                        p2, p3 = nozzle_pos
+                        rad2, rad3 = np.linalg.norm(p2), np.linalg.norm(p3)
+                        n2_pos_str = f"({p2[0]:.3f}, {p2[1]:.3f})"
+                        n2_rad_str = f"{rad2:.3f}"
+                        n3_pos_str = f"({p3[0]:.3f}, {p3[1]:.3f})"
+                        n3_rad_str = f"{rad3:.3f}"
+                    else:
+                        # Fallback if for some reason it's not a list
+                        pos = nozzle_pos
+                        rad = np.linalg.norm(pos)
+                        n2_pos_str = f"({pos[0]:.3f}, {pos[1]:.3f})"
+                        n2_rad_str = f"{rad:.3f}"
+
                 # 優化：直接從 NumPy 陣列過濾在晶圓上的粒子座標
                 on_wafer_mask = engine.particles_state == 2 # P_ON_WAFER
                 all_on_wafer_coords = engine.particles_pos[on_wafer_mask, :2]
@@ -1289,19 +1348,20 @@ class SimulationApp:
                 # 使用使用者自定義的徑向間隔
                 radial_interval = current_config.get('REPORT_INTERVAL_MM', 2.0)
                 radial_counts = calculate_water_counts_by_radius(all_on_wafer_coords, WAFER_RADIUS, radial_interval)
-                
-                nozzle_r = np.linalg.norm(main_nozzle_pos) if snapshot['active_arm_id'] != 0 else 0.0
 
                 row_data = {
                     'Time Elapsed': f"{snapshot['time']:.2f}",
                     'Process Recipe Number': snapshot['process_idx'] + 1,
-                    'Dispense Arm Number': snapshot['active_arm_id'] if snapshot['active_arm_id'] != 0 else 'N/A',
+                    'Dispense Arm Number': active_arm if active_arm != 0 else 'N/A',
                     'State': snapshot['state'],
                     'Process Time': "Running" if snapshot['state'] in [STATE_RUNNING_PROCESS, STATE_MOVING_FROM_CENTER_TO_START] else "N/A",
                     'Spin speed': f"{snapshot['rpm']:.2f}",
-                    'Nozzle X-Position': f"{main_nozzle_pos[0]:.3f}" if snapshot['active_arm_id'] != 0 else 'N/A',
-                    'Nozzle Y-Position': f"{main_nozzle_pos[1]:.3f}" if snapshot['active_arm_id'] != 0 else 'N/A',
-                    'Nozzle Radius': f"{nozzle_r:.3f}" if snapshot['active_arm_id'] != 0 else 'N/A',
+                    'Nozzle 1 (X,Y)': n1_pos_str,
+                    'Nozzle 1 Radius': n1_rad_str,
+                    'Nozzle 2 (X,Y)': n2_pos_str,
+                    'Nozzle 2 Radius': n2_rad_str,
+                    'Nozzle 3 (X,Y)': n3_pos_str,
+                    'Nozzle 3 Radius': n3_rad_str,
                 }
                 row_data.update(radial_counts)
                 report_data.append(row_data)

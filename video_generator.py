@@ -33,17 +33,17 @@ class VideoGenerator:
         2. 確保多個製程 100% 完整錄製。
         3. 支援播放倍率 (play_speed_multiplier)，實現流暢的慢動作影片導出。
         """
-        # --- 1. 初始化繪圖環境 ---
-        fig = Figure(figsize=(8, 8), dpi=100)
+        # --- 1. 初始化繪圖環境 (與 Simulator 保持一致：寬 700, 高 450) ---
+        fig = Figure(figsize=(7, 4.5), dpi=100)
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
         ax.set_aspect('equal', 'box')
         ax.set_facecolor('black')
-        ax.set_xlim(-CHAMBER_SIZE / 2, CHAMBER_SIZE / 2)
-        ax.set_ylim(-CHAMBER_SIZE / 2, CHAMBER_SIZE / 2)
+        ax.set_xlim(-350, 350)
+        ax.set_ylim(-225, 225)
 
         # 背景元件
-        ax.add_patch(plt.Rectangle((-CHAMBER_SIZE/2, -CHAMBER_SIZE/2), CHAMBER_SIZE, CHAMBER_SIZE, facecolor='none', edgecolor='gray', lw=2))
+        ax.add_patch(plt.Rectangle((-350, -225), 700, 450, facecolor='none', edgecolor='gray', lw=2))
         ax.add_patch(plt.Circle((0, 0), WAFER_RADIUS, facecolor='#222222', edgecolor='cyan', lw=1.5, zorder=1))
         # 晶圓中心點
         ax.add_patch(plt.Circle((0, 0), 3, color='cyan', zorder=2))
@@ -57,7 +57,19 @@ class VideoGenerator:
             arm_line, = ax.plot([], [], color='gray', lw=4, zorder=12)
             nozzle_head = plt.Circle((0, 0), 10, facecolor=arm_colors[i], zorder=13)
             ax.add_patch(nozzle_head)
-            arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], geo['p_start'], geo['p_end'], arm_line, nozzle_head)
+            
+            if i == 2:
+                side_arm_line, = ax.plot([], [], color='gray', lw=4, zorder=12)
+                side_nozzle_head = plt.Circle((0, 0), 10, facecolor='yellow', zorder=13)
+                ax.add_patch(side_nozzle_head)
+                arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], 
+                                   arm_line, nozzle_head, 
+                                   side_arm_length=geo.get('side_arm_length'), 
+                                   side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                   side_arm_branch_dist=geo.get('side_arm_branch_dist'),
+                                   side_arm_artist=side_arm_line, side_nozzle_artist=side_nozzle_head)
+            else:
+                arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], arm_line, nozzle_head)
 
         water_artists = {}
         for i in range(1, 4):
@@ -147,7 +159,7 @@ class VideoGenerator:
                     try:
                         p_bar, p_label = progress_widgets['bar'], progress_widgets['label']
                         # 預估總時長包含 10s 機械動作緩衝
-                        est_total = recipe_net_duration + 10.0
+                        est_total = recipe_net_duration + 3.0
                         p_bar['maximum'] = est_total
                         p_bar['value'] = min(snapshot['time'], est_total)
                         p_label.config(text=f"Exporting Video: {snapshot['time']:.1f}s / (Simulating...)")

@@ -165,7 +165,7 @@ class EtchingAmountGenerator:
         shear_coeff = config.get('ETCHING_SHEAR_COEFF', 0.0001)
 
         # 1. 初始化 Headless Arms
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], geo['p_start'], geo['p_end'], None, None) 
+        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
                          for i, geo in ARM_GEOMETRIES.items()}
 
         water_params = self.app._get_water_params()

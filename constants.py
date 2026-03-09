@@ -90,14 +90,14 @@ STATE_MOVING_FROM_CENTER_TO_START = "MOVING_FROM_CENTER_TO_START"
 
 ARM_GEOMETRIES = {
     1: {
-        "pivot": np.array([-280.0, -165.0]), 
+        "pivot": np.array([-264.1, -189.41]), 
         "length": 325.0,
-        "home": np.array([-280.0, 160.0])
+        "home": np.array([-264.1, 135.59])
     },
     2: {
-        "pivot": np.array([280.0, -165.0]), 
+        "pivot": np.array([264.1, -189.41]), 
         "length": 325.0,
-        "home": np.array([280.0, 160.0]),
+        "home": np.array([264.1, 135.59]),
         "side_arm_length": 77.8,
         "side_arm_angle_offset": np.deg2rad(60), # 60 degrees offset for the side arm
         "side_arm_branch_dist": 215.5 # 分支點距離 Pivot 的距離 (mm)

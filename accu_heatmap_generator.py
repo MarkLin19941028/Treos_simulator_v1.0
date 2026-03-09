@@ -53,7 +53,7 @@ class AccuHeatmapGenerator:
             config = get_default_config()
 
         # 1. 初始化 Headless Arms
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], geo['p_start'], geo['p_end'], None, None) 
+        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
                          for i, geo in ARM_GEOMETRIES.items()}
 
         # 嘗試獲取水參數
