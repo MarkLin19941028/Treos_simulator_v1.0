@@ -140,13 +140,21 @@ class ChargingGenerator:
         perm = config.get('FLUID_RELATIVE_PERMITTIVITY', 80.0)
         eff_base = config.get('CHARGING_EFFICIENCY', -1.0e-10) # TEOS 通常為負
         rpm_factor = config.get('CHARGING_RPM_FACTOR', 5.0)    # RPM 增強因子
-        diff_coeff = config.get('SURFACE_DIFFUSION_COEFF', 0.1) # 擴散係數
+        diff_coeff = config.get('SURFACE_DIFFUSION_COEFF', 0.1) # 擴散係係數
         base_spin_decay = config.get('CHARGING_BASE_SPIN_DECAY', 2.0)
         
         # 2. 初始化模擬引擎
         # 為了獨立運作，我們需要自己的 SimulationEngine 來跑粒子軌跡
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
-                         for i, geo in ARM_GEOMETRIES.items()}
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
+                
         water_params = self.app._get_water_params() # 沿用主程式的水參數
         
         # 為了相容性，簡單包裝
@@ -230,24 +238,33 @@ class ChargingGenerator:
                         return False # 返回 False 表示生成失敗
 
             # --- A. 簡易液膜生成 (為了支撐電荷計算) ---
-            on_wafer_mask = engine.particles_state == 2 # P_ON_WAFER
+            on_wafer_mask = (engine.particles_state == 2) # P_ON_WAFER
             if np.any(on_wafer_mask):
                 indices = np.where(on_wafer_mask)[0]
+                current_proc = recipe['processes'][snapshot['process_idx']]
                 for idx in indices:
                     pos = engine.particles_pos[idx]
-                    self._simple_deposit_film(self.film_matrix, pos[0], pos[1], 2.0, 0.005) # 2mm半徑, 0.005厚度增量
-            
-            # --- B. 電荷分離沉積 [改良點 2] ---
-            if np.any(on_wafer_mask):
-                indices = np.where(on_wafer_mask)[0]
-                for idx in indices:
-                    pos = engine.particles_pos[idx]
+                    
+                    # [修正] 考慮噴嘴流量對液膜與電荷的影響
+                    p_arm_id = engine.particles_arm_id[idx]
+                    if p_arm_id == 3:
+                        actual_flow = current_proc.get('flow_rate_2', 500.0)
+                    else:
+                        actual_flow = current_proc.get('flow_rate', 500.0)
+                    
+                    # 流量基礎係數 (以 500mL/min 為基準)
+                    flow_scale = actual_flow / 500.0
+                    
+                    # A. 沉積液膜
+                    self._simple_deposit_film(self.film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)
+                    
+                    # B. 電荷分離沉積
                     vel = engine.particles_vel[idx]
                     _numba_deposit_and_separate_charge(
                         self.surface_charge, self.liquid_charge, self.film_matrix,
                         pos[0], pos[1], vel[0], vel[1],
                         2.0, grid_size, dt,
-                        dynamic_eff
+                        dynamic_eff * flow_scale
                     )
 
             # --- C. 表面擴散 (平滑化) [改良點 3] ---

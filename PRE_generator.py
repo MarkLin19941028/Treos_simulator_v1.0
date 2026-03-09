@@ -76,10 +76,18 @@ class PREGenerator:
         pre_q_ref = config.get('PRE_Q_REF', PRE_Q_REF)
         pre_gamma_base = config.get('PRE_GAMMA_BASE', PRE_GAMMA_BASE)
 
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
-                         for i, geo in ARM_GEOMETRIES.items()}
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
 
         water_params = self.app._get_water_params()
+
         water_params_dict = {i: {
             'viscosity': water_params['viscosity'],
             'surface_tension': water_params['surface_tension'],
@@ -136,22 +144,28 @@ class PREGenerator:
                         return False # 返回 False 表示生成失敗
 
             current_proc = recipe['processes'][snapshot['process_idx']]
-            q_actual = current_proc.get('flow_rate', pre_q_ref)
-            flow_ratio = q_actual / pre_q_ref
-            c_q = math.sqrt(flow_ratio) 
-            g_q = 1.0 / math.sqrt(flow_ratio) if flow_ratio > 0 else 1.0 
-            gamma_eff = pre_gamma_base * g_q
-
             current_rpm = snapshot['rpm']
             omega = (current_rpm / 60.0) * 2 * math.pi
             
             # 優化：直接從引擎的 NumPy 陣列提取 (現在引擎直接提供旋轉座標系下的座標)
-            on_wafer_mask = engine.particles_state == 2 # P_ON_WAFER
+            on_wafer_mask = (engine.particles_state == 2) # P_ON_WAFER
             if np.any(on_wafer_mask):
                 indices = np.where(on_wafer_mask)[0]
                 for i in indices:
                     # 1. 取得旋轉座標系座標
                     center_x, center_y = engine.particles_pos[i, 0], engine.particles_pos[i, 1]
+                    
+                    # [修正] 針對不同噴嘴決定實際流量 q_actual
+                    p_arm_id = engine.particles_arm_id[i]
+                    if p_arm_id == 3:
+                        q_actual = current_proc.get('flow_rate_2', 500.0)
+                    else:
+                        q_actual = current_proc.get('flow_rate', 500.0)
+
+                    flow_ratio = q_actual / pre_q_ref
+                    c_q = math.sqrt(flow_ratio) 
+                    g_q = 1.0 / math.sqrt(flow_ratio) if flow_ratio > 0 else 1.0 
+                    gamma_eff = pre_gamma_base * g_q
                     
                     r_val = math.sqrt(center_x**2 + center_y**2)
                     

@@ -165,8 +165,15 @@ class EtchingAmountGenerator:
         shear_coeff = config.get('ETCHING_SHEAR_COEFF', 0.0001)
 
         # 1. 初始化 Headless Arms
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
-                         for i, geo in ARM_GEOMETRIES.items()}
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
 
         water_params = self.app._get_water_params()
         water_params_dict = {i: {
@@ -250,13 +257,28 @@ class EtchingAmountGenerator:
 
             # --- A. 粒子塗抹 (Deposition) ---
             # 粒子作為 "水源"，將新鮮藥液塗在網格上
-            on_wafer_mask = engine.particles_state == 2 # P_ON_WAFER
+            on_wafer_mask = (engine.particles_state == 2) # P_ON_WAFER
             if np.any(on_wafer_mask):
                 indices = np.where(on_wafer_mask)[0]
                 
+                # [修正] 預先獲取當前製程對象，避免在迴圈內多次查找
+                current_proc_idx = snapshot['process_idx']
+                current_proc = recipe['processes'][current_proc_idx]
+
                 for i in indices:
                     # 取得相對座標
                     rel_x, rel_y = engine.particles_pos[i, 0], engine.particles_pos[i, 1]
+                    
+                    # [修正] 針對不同噴嘴流量進行加成補償
+                    # 若為 Nozzle 3 (arm_id=3)，其流量來自 flow_rate_2
+                    p_arm_id = engine.particles_arm_id[i]
+                    if p_arm_id == 3:
+                        actual_flow = current_proc.get('flow_rate_2', 500.0)
+                    else:
+                        actual_flow = current_proc.get('flow_rate', 500.0)
+                    
+                    # 根據流量調整沉積強度 (線性比例)
+                    flow_bonus = imp_bonus * (actual_flow / 500.0)
                     
                     # 呼叫 Numba 核心進行塗抹
                     _numba_deposit_liquid(
@@ -264,7 +286,7 @@ class EtchingAmountGenerator:
                         rel_x, rel_y, 
                         grid_radius, grid_size, dt, 
                         fresh_conc=1.0,
-                        impingement_bonus=imp_bonus
+                        impingement_bonus=flow_bonus
                     )
 
             # --- B. 網格演化 (Evolution) ---

@@ -53,8 +53,15 @@ class AccuHeatmapGenerator:
             config = get_default_config()
 
         # 1. 初始化 Headless Arms
-        headless_arms = {i: DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None) 
-                         for i, geo in ARM_GEOMETRIES.items()}
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
 
         # 嘗試獲取水參數
         try:
@@ -131,7 +138,10 @@ class AccuHeatmapGenerator:
             
             # 步驟 A: 快速提取座標 (優化：直接從引擎的 NumPy 陣列提取)
             # 現在引擎直接提供相對於晶圓的座標
-            on_wafer_mask = engine.particles_state == 2 # P_ON_WAFER
+            on_wafer_mask = (engine.particles_state == 2) # P_ON_WAFER
+            
+            # [修正] 確保考慮到 Nozzle 3 (arm_id=3) 的粒子
+            # engine.particles_pos 已經包含了所有粒子的座標，只要狀態是 ON_WAFER 都該被計入
             coords_array = engine.particles_pos[on_wafer_mask, :2]
             
             if coords_array.size > 0:
