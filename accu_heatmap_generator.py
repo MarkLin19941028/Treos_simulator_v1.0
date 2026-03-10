@@ -217,7 +217,7 @@ class AccuHeatmapGenerator:
             print(f"Failed to write heatmap raw data to CSV: {e}")
         
         self._export_accumulation_radial_distribution(heatmap_matrix, radial_png_path)
-
+        
     def _export_accumulation_radial_distribution(self, matrix, filepath):
         """
         計算並輸出隨半徑變化的累積時間分佈圖 (Radial Distribution)
@@ -228,27 +228,31 @@ class AccuHeatmapGenerator:
         y, x = np.indices(matrix.shape)
         r = np.sqrt((x - center + 0.5)**2 + (y - center + 0.5)**2)
         
-        r_rounded = r.astype(int)
-        max_r = int(WAFER_RADIUS)
+        bin_size = 3.0
+        r_binned = (r // bin_size).astype(int)
+        max_r = float(WAFER_RADIUS)
+        max_bin = int(max_r // bin_size)
         
-        radial_sum = np.zeros(max_r + 1)
-        radial_count = np.zeros(max_r + 1)
+        radial_sum = np.zeros(max_bin + 1)
+        radial_count = np.zeros(max_bin + 1)
         
-        mask = r_rounded <= max_r
-        np.add.at(radial_sum, r_rounded[mask], matrix[mask])
-        np.add.at(radial_count, r_rounded[mask], 1)
+        mask = r <= max_r
+        np.add.at(radial_sum, r_binned[mask], matrix[mask])
+        np.add.at(radial_count, r_binned[mask], 1)
         
         radial_avg = np.divide(radial_sum, radial_count, out=np.zeros_like(radial_sum), where=radial_count > 0)
         
+        bin_centers = np.arange(max_bin + 1) * bin_size + (bin_size / 2.0)
+        
         plt.figure(figsize=(10, 6), dpi=100)
-        plt.plot(np.arange(len(radial_avg)), radial_avg, color='red', linewidth=2, label='Average Accumulation')
-        plt.fill_between(np.arange(len(radial_avg)), radial_avg, alpha=0.2, color='red')
+        plt.plot(bin_centers, radial_avg, color='red', linewidth=2, label='Average Accumulation')
+        plt.fill_between(bin_centers, radial_avg, alpha=0.2, color='red')
         
         plt.title("Radial Accumulation Distribution", fontsize=14, pad=15)
         plt.xlabel("Radius (mm)", fontsize=12)
         plt.ylabel("Average Accumulation Time (s)", fontsize=12)
         plt.xlim(0, max_r)
-        plt.xticks(np.arange(0, max_r + 1, 10))
+        plt.xticks(np.arange(0, max_r + 1, 15)) # Ticks every 15mm for better visibility
         plt.ylim(0, np.max(radial_avg) * 1.1 if np.max(radial_avg) > 0 else 1.0)
         plt.grid(True, linestyle='--', alpha=0.7)
 
