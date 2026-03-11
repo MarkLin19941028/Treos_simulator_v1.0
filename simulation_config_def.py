@@ -12,6 +12,7 @@ PARAMETER_DEFINITIONS = {
         "REPORT_LOG_INTERVAL":        ("Report Log Interval (s)", 0.01, 'float', (0.001, 5.0), "Simulation Report 時間記錄間隔 (s)"),
     },
     "Etching Amount": {
+        "ETCHING_GLOBAL_SCALE":       ("Global Scale", 1.0, 'float', (0.0001, 100.0), "全域縮放參數。"),
         "GRID_SIZE":                  ("Grid Size (radius)", 5.0, 'float', (0.0000001, 150.0), "單個粒子的影響半徑 (mm)。影響渲染的解析度與路徑平滑度。"),
         "ETCHING_TAU":                ("Etching Tau", 0.3, 'float', (0.0000001, 50.0), "化學老化常數 (s)。模擬藥液活性隨時間衰減的速度。"),
         "ETCHING_SATURATION_THICKNESS":("Saturation Thickness", 0.002, 'float', (0.00000001, 10.0), "反應飽和與膜厚。模擬化學反應在表面完全潤濕後的飽和上限。"),
