@@ -445,6 +445,83 @@ class EtchingAmountGenerator:
         # 3. 輸出徑向分佈圖 (Radial Distribution)
         self._export_radial_distribution(matrix, radial_png_path)
 
+    def run_fast_simulation(self, recipe, config):
+        """專供 AutoTuner 使用的極速無頭模擬，只回傳最終的蝕刻矩陣與徑向分佈"""
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
+
+        water_params = self.app._get_water_params() if hasattr(self, 'app') and hasattr(self.app, '_get_water_params') else {'viscosity': 1.0, 'surface_tension': 72.0, 'evaporation_rate': 0.1}
+        water_params_dict = {i: water_params for i in [1, 2, 3]}
+
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        
+        grid_size = 300
+        etch_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
+        film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
+        conc_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
+
+        report_fps = recipe.get('dynamic_report_fps', 30)
+        dt = 1.0 / report_fps
+        total_duration = sum(p['total_duration'] for p in recipe['processes'])
+        sim_clock = 0.0
+
+        # 讀取參數
+        etch_tau = config.get('ETCHING_TAU', 1.5)
+        base_spin_decay = config.get('ETCHING_BASE_SPIN_DECAY', 2.0)
+        imp_bonus = config.get('ETCHING_IMPINGEMENT_BONUS', 1.2)
+        geo_smoothing = config.get('ETCHING_GEO_SMOOTHING', 7.0)
+        sat_threshold = config.get('ETCHING_SATURATION_THRESHOLD', 0.002)
+        sat_h = config.get('ETCHING_SATURATION_THICKNESS', 0.5)
+        shear_coeff = config.get('ETCHING_SHEAR_COEFF', 0.0001)
+        global_scale = config.get('ETCHING_GLOBAL_SCALE', 1.0)
+        grid_radius = config.get('GRID_SIZE', 1.5)
+
+        while True:
+            snapshot = engine.update(dt) 
+            sim_clock += dt
+
+            on_wafer_mask = engine.particles_state == 2 
+            if np.any(on_wafer_mask):
+                indices = np.where(on_wafer_mask)[0]
+                for i in indices:
+                    rel_x, rel_y = engine.particles_pos[i, 0], engine.particles_pos[i, 1]
+                    _numba_deposit_liquid(film_matrix, conc_matrix, rel_x, rel_y, grid_radius, grid_size, dt, 1.0, imp_bonus)
+
+            current_rpm = snapshot.get('rpm', 0)
+            current_spin_decay = base_spin_decay * (1.0 + abs(current_rpm) / 500.0)
+
+            _numba_evolve_grid(
+                etch_matrix, film_matrix, conc_matrix,
+                dt, current_spin_decay, etch_tau,
+                sat_h, WAFER_RADIUS, geo_smoothing, sat_threshold,
+                current_rpm, shear_coeff, global_scale
+            )
+
+            if snapshot.get('is_finished') or sim_clock > (total_duration + 3.0):
+                 break
+
+        # 計算徑向平均
+        center = grid_size / 2.0
+        y, x = np.indices(etch_matrix.shape)
+        r = np.sqrt((x - center + 0.5)**2 + (y - center + 0.5)**2)
+        r_rounded = r.astype(int)
+        max_r = int(WAFER_RADIUS)
+        radial_sum = np.zeros(max_r + 1)
+        radial_count = np.zeros(max_r + 1)
+        mask = r_rounded <= max_r
+        np.add.at(radial_sum, r_rounded[mask], etch_matrix[mask])
+        np.add.at(radial_count, r_rounded[mask], 1)
+        radial_avg = np.divide(radial_sum, radial_count, out=np.zeros_like(radial_sum), where=radial_count > 0)
+
+        return etch_matrix, radial_avg
+
     def _export_radial_distribution(self, matrix, filepath):
         grid_size = matrix.shape[0]
         center = grid_size / 2.0
