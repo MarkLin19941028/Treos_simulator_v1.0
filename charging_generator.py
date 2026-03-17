@@ -126,6 +126,110 @@ class ChargingGenerator:
     def __init__(self, app_instance):
         self.app = app_instance
 
+    def run_fast_simulation(self, recipe, config):
+        """
+        Fast simulation specifically for tuning, returns radial average of surface potential
+        """
+        cond = config.get('FLUID_CONDUCTIVITY', 5.0e-12)
+        perm = config.get('FLUID_RELATIVE_PERMITTIVITY', 80.0)
+        eff_base = config.get('CHARGING_EFFICIENCY', -1.0e-10)
+        rpm_factor = config.get('CHARGING_RPM_FACTOR', 5.0)
+        diff_coeff = config.get('SURFACE_DIFFUSION_COEFF', 0.1)
+        base_spin_decay = config.get('CHARGING_BASE_SPIN_DECAY', 2.0)
+        
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
+                
+        water_params = self.app._get_water_params() if self.app else {
+            'viscosity': 1.0e-3, 'surface_tension': 72.8e-3, 'evaporation_rate': 0.0
+        }
+        wp_dict = {1: water_params, 2: water_params, 3: water_params}
+        
+        engine = SimulationEngine(recipe, headless_arms, wp_dict, headless=True, config=config)
+        
+        grid_size = 300
+        surface_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
+        surface_buffer = np.zeros((grid_size, grid_size), dtype=np.float64)
+        liquid_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
+        film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
+
+        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
+        dt = 1.0 / report_fps
+        total_duration = sum(p['total_duration'] for p in recipe['processes'])
+        sim_clock = 0.0
+
+        while True:
+            snapshot = engine.update(dt)
+            sim_clock += dt
+            curr_rpm = abs(snapshot.get('rpm', 0))
+
+            dynamic_eff = eff_base * (1.0 + (curr_rpm / 1000.0)**2 * rpm_factor)
+            
+            on_wafer_mask = (engine.particles_state == 2)
+            if np.any(on_wafer_mask):
+                indices = np.where(on_wafer_mask)[0]
+                current_proc = recipe['processes'][snapshot['process_idx']]
+                for idx in indices:
+                    pos = engine.particles_pos[idx]
+                    
+                    p_arm_id = engine.particles_arm_id[idx]
+                    if p_arm_id == 3:
+                        actual_flow = current_proc.get('flow_rate_2', 500.0)
+                    else:
+                        actual_flow = current_proc.get('flow_rate', 500.0)
+                    
+                    flow_scale = actual_flow / 500.0
+                    
+                    self._simple_deposit_film(film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)
+                    
+                    vel = engine.particles_vel[idx]
+                    _numba_deposit_and_separate_charge(
+                        surface_charge, liquid_charge, film_matrix,
+                        pos[0], pos[1], vel[0], vel[1],
+                        2.0, grid_size, dt,
+                        dynamic_eff * flow_scale
+                    )
+
+            _numba_diffuse_surface(surface_charge, surface_buffer, diff_coeff, dt, 300)
+            surface_charge[:] = surface_buffer[:]
+
+            rpm = snapshot.get('rpm', 0)
+            current_spin_decay = base_spin_decay * (1.0 + abs(rpm)/500.0)
+            
+            _numba_evolve_charge(
+                liquid_charge, film_matrix, dt,
+                cond, perm, WAFER_RADIUS, current_spin_decay
+            )
+
+            if snapshot.get('is_finished') or sim_clock > total_duration + 2.0:
+                break
+                
+        potential_map = self._calculate_potential(surface_charge, config)
+        radial_avg = self.calculate_radial_average(potential_map)
+        return radial_avg, potential_map
+
+    def calculate_radial_average(self, matrix):
+        grid_size = matrix.shape[0]
+        center = grid_size / 2.0
+        y, x = np.indices(matrix.shape)
+        r = np.sqrt((x - center + 0.5)**2 + (y - center + 0.5)**2)
+        r_rounded = r.astype(int)
+        max_r = int(WAFER_RADIUS)
+        radial_sum = np.zeros(max_r + 1)
+        radial_count = np.zeros(max_r + 1)
+        mask = r_rounded <= max_r
+        np.add.at(radial_sum, r_rounded[mask], matrix[mask])
+        np.add.at(radial_count, r_rounded[mask], 1)
+        radial_avg = np.divide(radial_sum, radial_count, out=np.zeros_like(radial_sum), where=radial_count > 0)
+        return radial_avg
+
     def generate(self, recipe, filepath, config=None, progress_widgets=None, play_speed_multiplier=1.0):
         """
         執行電荷累積模擬 (解耦雙電層模型 Decoupled EDL Model)

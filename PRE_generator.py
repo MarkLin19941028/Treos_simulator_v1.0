@@ -62,6 +62,97 @@ class PREGenerator:
     def __init__(self, app_instance):
         self.app = app_instance
 
+    def run_fast_simulation(self, recipe, config):
+        """
+        Fast simulation specifically for tuning, returns final_defects array and dose_matrix
+        """
+        pre_alpha = config.get('PRE_ALPHA', PRE_ALPHA)
+        pre_beta = config.get('PRE_BETA', PRE_BETA)
+        pre_grid_radius = config.get('PRE_GRID_SIZE', PRE_GRID_SIZE)
+        pre_q_ref = config.get('PRE_Q_REF', PRE_Q_REF)
+        pre_gamma_base = config.get('PRE_GAMMA_BASE', PRE_GAMMA_BASE)
+        pre_defect_count = int(config.get('PRE_DEFECT_COUNT', 10000))
+        defectmap_cali = config.get('PRE_DEFECT_CALI', 0.5)
+
+        headless_arms = {}
+        for i, geo in ARM_GEOMETRIES.items():
+            if i == 2:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None,
+                                           side_arm_length=geo.get('side_arm_length'), 
+                                           side_arm_angle_offset=geo.get('side_arm_angle_offset'),
+                                           side_arm_branch_dist=geo.get('side_arm_branch_dist'))
+            else:
+                headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
+
+        water_params = self.app._get_water_params() if self.app else {
+            'viscosity': 1.0e-3, 'surface_tension': 72.8e-3, 'evaporation_rate': 0.0
+        }
+
+        water_params_dict = {i: {
+            'viscosity': water_params['viscosity'],
+            'surface_tension': water_params['surface_tension'],
+            'evaporation_rate': water_params['evaporation_rate']
+        } for i in [1, 2, 3]}
+
+        # Create headless engine, possibly lower fps for speed
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        
+        grid_size = 300
+        dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
+        
+        # Determine dt based on tuning
+        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
+        # We can use a lower fps for tuning to speed up if desired, but here we keep consistency
+        dt = 1.0 / report_fps
+        total_duration = sum(p['total_duration'] for p in recipe['processes'])
+        sim_clock = 0.0
+
+        while True:
+            snapshot = engine.update(dt) 
+            sim_clock += dt
+            
+            current_proc = recipe['processes'][snapshot['process_idx']]
+            current_rpm = snapshot['rpm']
+            omega = (current_rpm / 60.0) * 2 * math.pi
+            
+            on_wafer_mask = (engine.particles_state == 2) # P_ON_WAFER
+            if np.any(on_wafer_mask):
+                indices = np.where(on_wafer_mask)[0]
+                for i in indices:
+                    center_x, center_y = engine.particles_pos[i, 0], engine.particles_pos[i, 1]
+                    p_arm_id = engine.particles_arm_id[i]
+                    if p_arm_id == 3:
+                        q_actual = current_proc.get('flow_rate_2', 500.0)
+                    else:
+                        q_actual = current_proc.get('flow_rate', 500.0)
+
+                    flow_ratio = q_actual / pre_q_ref
+                    c_q = math.sqrt(flow_ratio) 
+                    g_q = 1.0 / math.sqrt(flow_ratio) if flow_ratio > 0 else 1.0 
+                    gamma_eff = pre_gamma_base * g_q
+                    
+                    r_val = math.sqrt(center_x**2 + center_y**2)
+                    
+                    shear_part = pre_alpha * (abs(omega) ** 1.5) * r_val
+                    impact_part = pre_beta * c_q
+                    k_raw = shear_part + impact_part
+                    
+                    eta = math.exp(-gamma_eff * r_val)
+                    dose_contribution = k_raw * eta * dt
+                    
+                    _numba_apply_pre_kernel(
+                        dose_matrix, center_x, center_y, dose_contribution, 
+                        pre_grid_radius, grid_size
+                    )
+
+            if snapshot.get('is_finished') or sim_clock > (total_duration + 5.0):
+                break
+
+        incoming_defects = self._generate_incoming_defects(pre_defect_count)
+        final_defects = self._simulate_defect_survival(incoming_defects, dose_matrix, defectmap_cali)
+
+        return dose_matrix, final_defects, incoming_defects
+
     def generate(self, recipe, filepath, config=None, progress_widgets=None):
         """
         Cleaning Dose 模擬邏輯 (Numba 加速版)
