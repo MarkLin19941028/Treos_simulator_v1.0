@@ -31,6 +31,7 @@ from PRE_generator import PREGenerator
 from charging_generator import ChargingGenerator
 from moving_pattern import MovingPatternGenerator
 from simulation_config_def import PARAMETER_DEFINITIONS, get_default_config
+from AutoTuner import AutoTunerGUI
 
 class WaterColumn:
     def __init__(self, ax, flow_rate_ml_per_min):
@@ -361,6 +362,10 @@ class SimulationApp:
         ttk.Button(report_frame, text="Etching Amount", command=self.export_etching_amount).grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         ttk.Button(report_frame, text="Particle Removal", command=self.export_pre_efficiency).grid(row=1, column=2, padx=5, pady=2, sticky="ew")
         ttk.Button(report_frame, text="Charging", command=self.export_charging_simulation).grid(row=1, column=3, padx=5, pady=2, sticky="ew")
+        
+        # Row 3
+        ttk.Button(report_frame, text="AutoTune", command=self.open_autotuner).grid(row=2, column=0, padx=5, pady=2, sticky="ew")
+
         global_frame = ttk.LabelFrame(content_frame, text="Global Parameters", padding="10")
         global_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         ttk.Label(global_frame, text="Wafer Spin Direction:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -1469,6 +1474,10 @@ class SimulationApp:
             if hasattr(wc, 'artist'): artists.append(wc.artist)
             if hasattr(wc, 'on_wafer_artist'): artists.append(wc.on_wafer_artist)
         return artists
+
+    def open_autotuner(self):
+        tuner_window = tk.Toplevel(self.root)
+        AutoTunerGUI(tuner_window, main_app=self)
 
     def on_closing(self):
         try:
