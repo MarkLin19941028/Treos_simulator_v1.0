@@ -37,6 +37,9 @@ class MovingPatternGenerator:
             ext = '.png'
         filepath_img = f"{base_path}_Moving_Pattern{ext}"
         filepath_vid = f"{base_path}_Moving_Pattern.mp4"
+        filepath_heatmap = f"{base_path}_Time_Heatmap{ext}"
+        filepath_csv = f"{base_path}_Time_Distribution.csv"
+        filepath_radial = f"{base_path}_Radial_Distribution{ext}"
 
         progress_window = tk.Toplevel(self.app.root)
         progress_window.title("Generating Pattern & Video")
@@ -61,15 +64,15 @@ class MovingPatternGenerator:
             except (AttributeError, ValueError):
                 current_multiplier = 1.0
 
-            self._run_headless_pattern_generation(parsed_recipe, filepath_img, filepath_vid, progress_widgets, play_speed_multiplier=current_multiplier)
-            messagebox.showinfo("Success", f"Moving Pattern and Video exported successfully to:\n{filepath_img}\n{filepath_vid}")
+            self._run_headless_pattern_generation(parsed_recipe, filepath_img, filepath_vid, filepath_heatmap, filepath_csv, filepath_radial, progress_widgets, play_speed_multiplier=current_multiplier)
+            messagebox.showinfo("Success", f"Moving Pattern, Heatmap, Radial Graph and CSV exported successfully to:\n{filepath_img}\n{filepath_vid}\n{filepath_heatmap}\n{filepath_radial}\n{filepath_csv}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate pattern and video: {e}")
         finally:
             if progress_window.winfo_exists():
                 progress_window.destroy()
 
-    def _run_headless_pattern_generation(self, recipe, filepath_img, filepath_vid, progress_widgets=None, play_speed_multiplier=1.0):
+    def _run_headless_pattern_generation(self, recipe, filepath_img, filepath_vid, filepath_heatmap, filepath_csv, filepath_radial, progress_widgets=None, play_speed_multiplier=1.0):
         fig = Figure(figsize=(7, 4.5), dpi=100)
         canvas = FigureCanvasAgg(fig)
         ax = fig.add_subplot(111)
@@ -94,6 +97,9 @@ class MovingPatternGenerator:
         wafer_mask = np.zeros((grid_size, grid_size), dtype=np.uint8)
         cv2.circle(wafer_mask, (offset, offset), int(WAFER_RADIUS), 1, -1)
         total_wafer_pixels = np.sum(wafer_mask)
+
+        # 建立累積覆蓋時間的矩陣
+        time_accumulation_matrix = np.zeros((grid_size, grid_size), dtype=np.float32)
 
         # Matplotlib 動態畫線的暫存容器
         arm_lines = {1: [], 2: [], 3: []}
@@ -183,7 +189,11 @@ class MovingPatternGenerator:
                         if last_pts[1] is not None:
                             p1 = (int(last_pts[1][0]) + offset, int(last_pts[1][1]) + offset)
                             p2 = (int(pt[0]) + offset, int(pt[1]) + offset)
-                            cv2.line(coverage_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                            # 使用線段畫出當前步長覆蓋的區域遮罩，並將其加到累積時間矩陣中
+                            temp_mask = np.zeros((grid_size, grid_size), dtype=np.uint8)
+                            cv2.line(temp_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                            time_accumulation_matrix += temp_mask * sim_dt
+                            cv2.bitwise_or(coverage_mask, temp_mask, dst=coverage_mask)
 
                 # Nozzle 2 & 3 (Arm 2)
                 elif curr_arm_id == 2:
@@ -203,7 +213,10 @@ class MovingPatternGenerator:
                             if last_pts[2] is not None:
                                 p1 = (int(last_pts[2][0]) + offset, int(last_pts[2][1]) + offset)
                                 p2 = (int(pt2[0]) + offset, int(pt2[1]) + offset)
-                                cv2.line(coverage_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                                temp_mask = np.zeros((grid_size, grid_size), dtype=np.uint8)
+                                cv2.line(temp_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                                time_accumulation_matrix += temp_mask * sim_dt
+                                cv2.bitwise_or(coverage_mask, temp_mask, dst=coverage_mask)
                         
                         # Nozzle 3
                         flow3 = curr_flows[3]
@@ -218,7 +231,10 @@ class MovingPatternGenerator:
                             if last_pts[3] is not None:
                                 p1 = (int(last_pts[3][0]) + offset, int(last_pts[3][1]) + offset)
                                 p2 = (int(pt3[0]) + offset, int(pt3[1]) + offset)
-                                cv2.line(coverage_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                                temp_mask = np.zeros((grid_size, grid_size), dtype=np.uint8)
+                                cv2.line(temp_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
+                                time_accumulation_matrix += temp_mask * sim_dt
+                                cv2.bitwise_or(coverage_mask, temp_mask, dst=coverage_mask)
 
             last_flows = curr_flows.copy()
             last_pts = curr_pts.copy()
@@ -294,3 +310,80 @@ class MovingPatternGenerator:
 
         fig.savefig(filepath_img, bbox_inches='tight', dpi=100)
         plt.close(fig)
+
+        # ====== 產生並儲存熱力圖 ======
+        # 將未在 Wafer 上的區域設為 NaN 以便塗色透明或指定背景
+        masked_time_matrix = np.where(wafer_mask == 1, time_accumulation_matrix, np.nan)
+        
+        fig_heat = Figure(figsize=(7, 6), dpi=100)
+        canvas_heat = FigureCanvasAgg(fig_heat)
+        ax_heat = fig_heat.add_subplot(111)
+        ax_heat.set_title("Nozzle Coverage Time Distribution (s)", fontsize=14, color='white')
+        ax_heat.set_facecolor('#111111')
+        fig_heat.patch.set_facecolor('#222222')
+        
+        extent = [-WAFER_RADIUS, WAFER_RADIUS, -WAFER_RADIUS, WAFER_RADIUS]
+        im = ax_heat.imshow(masked_time_matrix, extent=extent, origin='lower', cmap='jet', vmin=0)
+        ax_heat.set_xlabel("X (mm)", color='white')
+        ax_heat.set_ylabel("Y (mm)", color='white')
+        ax_heat.tick_params(colors='white')
+        
+        cbar = fig_heat.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.04)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.set_yticklabels([f"{x:.2f}" for x in cbar.get_ticks()], color='white')
+        cbar.set_label("Time (s)", color='white')
+        
+        fig_heat.savefig(filepath_heatmap, bbox_inches='tight', dpi=100, facecolor=fig_heat.get_facecolor())
+        plt.close(fig_heat)
+
+        # ====== 產生並儲存徑向分佈圖與 CSV ======
+        y_indices, x_indices = np.indices(time_accumulation_matrix.shape)
+        distances = np.sqrt((x_indices - offset)**2 + (y_indices - offset)**2)
+        
+        max_dist = int(WAFER_RADIUS)
+        radial_bins = np.arange(0, max_dist + 1, 1) # 1mm bins
+        radial_times = np.zeros(len(radial_bins) - 1)
+        
+        for i in range(len(radial_bins) - 1):
+            mask = (distances >= radial_bins[i]) & (distances < radial_bins[i+1]) & (wafer_mask == 1)
+            if np.any(mask):
+                radial_times[i] = np.mean(time_accumulation_matrix[mask])
+            else:
+                radial_times[i] = 0.0
+                
+        bin_centers = (radial_bins[:-1] + radial_bins[1:]) / 2.0
+
+        # 儲存 CSV (2D Grid & 1D Radial)
+        import csv
+        with open(filepath_csv, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["--- Radial Distribution ---"])
+            writer.writerow(["Radius (mm)", "Average Coverage Time (s)"])
+            for r, t in zip(bin_centers, radial_times):
+                writer.writerow([f"{r:.1f}", f"{t:.4f}"])
+            
+            writer.writerow([])
+            writer.writerow(["--- 2D Coverage Time Matrix (s) ---"])
+            writer.writerow(["Y \\ X"] + [f"{x - offset}" for x in range(grid_size)])
+            for y in range(grid_size):
+                row = [f"{y - offset}"] + [f"{masked_time_matrix[y, x]:.4f}" if not np.isnan(masked_time_matrix[y, x]) else "" for x in range(grid_size)]
+                writer.writerow(row)
+
+        # 儲存徑向分佈圖
+        fig_rad = Figure(figsize=(7, 4.5), dpi=100)
+        canvas_rad = FigureCanvasAgg(fig_rad)
+        ax_rad = fig_rad.add_subplot(111)
+        
+        ax_rad.plot(bin_centers, radial_times, '-', color='cyan', linewidth=2)
+        ax_rad.set_title("Radial Distribution of Nozzle Coverage Time", fontsize=14, color='white')
+        ax_rad.set_xlabel("Radius (mm)", color='white')
+        ax_rad.set_ylabel("Average Coverage Time (s)", color='white')
+        ax_rad.set_facecolor('#111111')
+        fig_rad.patch.set_facecolor('#222222')
+        ax_rad.tick_params(colors='white')
+        ax_rad.grid(True, color='#444444', linestyle='--', alpha=0.7)
+        ax_rad.set_xlim(0, max_dist)
+        ax_rad.set_ylim(bottom=0)
+        
+        fig_rad.savefig(filepath_radial, bbox_inches='tight', dpi=100, facecolor=fig_rad.get_facecolor())
+        plt.close(fig_rad)
