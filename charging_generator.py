@@ -152,7 +152,9 @@ class ChargingGenerator:
         }
         wp_dict = {1: water_params, 2: water_params, 3: water_params}
         
-        engine = SimulationEngine(recipe, headless_arms, wp_dict, headless=True, config=config)
+        # [優化] 啟用 fast_mode，並設定粒子縮放比例
+        fast_particle_scale = 0.3
+        engine = SimulationEngine(recipe, headless_arms, wp_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
         
         grid_size = 300
         surface_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
@@ -160,7 +162,15 @@ class ChargingGenerator:
         liquid_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
         film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
 
-        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
+        # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc.get('spin_params', {})
+            c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
+            if float(c_max) > max_rpm: max_rpm = float(c_max)
+        
+        report_fps = max(100, int(max_rpm * 1.5))
+        recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
         sim_clock = 0.0
@@ -186,6 +196,14 @@ class ChargingGenerator:
                         actual_flow = current_proc.get('flow_rate', 500.0)
                     
                     flow_scale = actual_flow / 500.0
+                    
+                    self._simple_deposit_film(film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)
+                    
+                    vel = engine.particles_vel[idx]
+                    # [優化] 補償減少的粒子數，確保總沉積液膜量不變 (charge_generator 的 _simple_deposit_film 已經包含 flow_scale，但我們也要對 _simple_deposit_film 做縮放)
+                    # Ah, wait, _simple_deposit_film is called before this.
+                    # Let's scale flow_scale
+                    flow_scale *= (1.0 / fast_particle_scale)
                     
                     self._simple_deposit_film(film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)
                     

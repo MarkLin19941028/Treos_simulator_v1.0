@@ -95,14 +95,30 @@ class PREGenerator:
         } for i in [1, 2, 3]}
 
         # Create headless engine, possibly lower fps for speed
-        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        fast_particle_scale = 0.3
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
+        
+        # [新增] 表面張力增益計算
+        # 從 UI 獲取實際表面張力 (預設純水 72.8 mN/m)
+        st_actual = water_params.get('surface_tension', 72.8)
+        # 避免除以零或負數，並設定基準值
+        st_ref = 72.8
+        # 計算增益係數 (開根號以平滑極端值)
+        f_st = math.sqrt(st_ref / max(st_actual, 1.0))
         
         grid_size = 300
         dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
         
         # Determine dt based on tuning
-        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
-        # We can use a lower fps for tuning to speed up if desired, but here we keep consistency
+        # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc.get('spin_params', {})
+            c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
+            if float(c_max) > max_rpm: max_rpm = float(c_max)
+        
+        report_fps = max(100, int(max_rpm * 1.5))
+        recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
         sim_clock = 0.0
@@ -129,16 +145,23 @@ class PREGenerator:
                     flow_ratio = q_actual / pre_q_ref
                     c_q = math.sqrt(flow_ratio) 
                     g_q = 1.0 / math.sqrt(flow_ratio) if flow_ratio > 0 else 1.0 
-                    gamma_eff = pre_gamma_base * g_q
+                    
+                    # [修改] 表面張力越低 (f_st 越大)，再附著係數越小
+                    gamma_eff = (pre_gamma_base * g_q) / f_st
                     
                     r_val = math.sqrt(center_x**2 + center_y**2)
                     
                     shear_part = pre_alpha * (abs(omega) ** 1.5) * r_val
                     impact_part = pre_beta * c_q
-                    k_raw = shear_part + impact_part
+                    
+                    # [修改] 將表面張力增益 f_st 加入總強度計算
+                    k_raw = (shear_part + impact_part) * f_st
                     
                     eta = math.exp(-gamma_eff * r_val)
                     dose_contribution = k_raw * eta * dt
+                    
+                    # [優化] 補償減少的粒子數，確保總能量不變
+                    dose_contribution *= (1.0 / fast_particle_scale)
                     
                     _numba_apply_pre_kernel(
                         dose_matrix, center_x, center_y, dose_contribution, 
@@ -186,6 +209,14 @@ class PREGenerator:
         } for i in [1, 2, 3]}
 
         engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        
+        # [新增] 表面張力增益計算
+        # 從 UI 獲取實際表面張力 (預設純水 72.8 mN/m)
+        st_actual = water_params.get('surface_tension', 72.8)
+        # 避免除以零或負數，並設定基準值
+        st_ref = 72.8
+        # 計算增益係數 (開根號以平滑極端值)
+        f_st = math.sqrt(st_ref / max(st_actual, 1.0))
         
         grid_size = 300
         dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
@@ -256,14 +287,18 @@ class PREGenerator:
                     flow_ratio = q_actual / pre_q_ref
                     c_q = math.sqrt(flow_ratio) 
                     g_q = 1.0 / math.sqrt(flow_ratio) if flow_ratio > 0 else 1.0 
-                    gamma_eff = pre_gamma_base * g_q
+                    
+                    # [修改] 表面張力越低 (f_st 越大)，再附著係數越小
+                    gamma_eff = (pre_gamma_base * g_q) / f_st
                     
                     r_val = math.sqrt(center_x**2 + center_y**2)
                     
                     # 2. 瞬時強度計算
                     shear_part = pre_alpha * (abs(omega) ** 1.5) * r_val
                     impact_part = pre_beta * c_q
-                    k_raw = shear_part + impact_part
+                    
+                    # [修改] 將表面張力增益 f_st 加入總強度計算
+                    k_raw = (shear_part + impact_part) * f_st
                     
                     # 3. 有效劑量因子
                     eta = math.exp(-gamma_eff * r_val)

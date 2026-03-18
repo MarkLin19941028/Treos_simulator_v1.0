@@ -155,10 +155,10 @@ def _physics_kernel(states, pos, vel, last_pos, life, time_on_wafer, path_length
                 eff_film_thinning = 1.0 + film_thinning_factor * (dist / wafer_radius)
                 
                 effective_visc = viscosities[arm_id] * visc_dry_factor * eff_film_thinning
-                damping_val = visc_damping * effective_visc * dt
-                # 阻尼限幅，確保數值穩定 (不超過 0.9)
-                if damping_val > 0.9: damping_val = 0.9
-                damping = 1.0 - damping_val
+                
+                # [修正] 採用指數衰減，確保大 dt 下的數值穩定性，不會產生過度減速或震盪
+                damping_exp = visc_damping * effective_visc * dt
+                damping = math.exp(-damping_exp)
                 
                 vel[i, 0] *= damping
                 vel[i, 1] *= damping
@@ -177,12 +177,14 @@ def _physics_kernel(states, pos, vel, last_pos, life, time_on_wafer, path_length
 
 
 class SimulationEngine:
-    def __init__(self, recipe, arms_dict, water_params_dict, headless=False, config=None):
+    def __init__(self, recipe, arms_dict, water_params_dict, headless=False, config=None, fast_mode=False, fast_particle_scale=0.5):
         self.recipe = recipe
         self.arms = arms_dict
         self.water_params = water_params_dict
         self.headless = headless
         self.config = config if config else {}
+        self.fast_mode = fast_mode
+        self.fast_particle_scale = fast_particle_scale
 
         self.simulation_mode = self.config.get('SIMULATION_MODE', 'full')
         self.max_nozzle_speed_mms = self.config.get('MAX_NOZZLE_SPEED_MMS', 250.0)
@@ -315,8 +317,13 @@ class SimulationEngine:
         spin_dir = self.recipe.get('spin_dir', 'cw')
 
         if self.simulation_mode == 'full':
-            # [優化] 動態計算子步數，與 WATER_RENDER_INTERPOLATION_LIMIT 掛鉤，改善高轉速連續性
-            SUB_STEPS = max(5, min(WATER_RENDER_INTERPOLATION_LIMIT, 5 + int(current_rpm / 40)))
+            if self.fast_mode:
+                # [優化] AutoTune 快速模式，忽略渲染連續性，確保物理計算穩定即可
+                SUB_STEPS = max(1, min(3, int(current_rpm / 300)))
+            else:
+                # [優化] 動態計算子步數，與 WATER_RENDER_INTERPOLATION_LIMIT 掛鉤，改善高轉速連續性
+                SUB_STEPS = max(5, min(WATER_RENDER_INTERPOLATION_LIMIT, 5 + int(current_rpm / 40)))
+            
             sub_dt = dt / SUB_STEPS
             
             omega = (current_rpm / 60.0) * 2 * math.pi * (-1 if spin_dir == 'cw' else 1)
@@ -500,6 +507,10 @@ class SimulationEngine:
             
             # 使用 PARTICLE_SPAWN_MULTIPLIER 調整粒子生成密度
             expected_particles = (flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER) * dt
+            
+            if hasattr(self, 'fast_mode') and self.fast_mode:
+                expected_particles *= self.fast_particle_scale
+                
             self._spawn_accumulator[src_id] += expected_particles
             
             count = int(self._spawn_accumulator[src_id])

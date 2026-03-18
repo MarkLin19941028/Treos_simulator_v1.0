@@ -279,7 +279,8 @@ class EtchingAmountGenerator:
                 spin = proc['spin_params']
                 c_max = spin['rpm'] if spin['mode'] == 'Simple' else max(spin['start_rpm'], spin['end_rpm'])
                 if c_max > max_rpm: max_rpm = c_max
-            recipe['dynamic_report_fps'] = max(800, int(max_rpm * 4))
+            # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
+            recipe['dynamic_report_fps'] = max(100, int(max_rpm * 1.5))
             
         headless_arms = {}
         for i, geo in ARM_GEOMETRIES.items():
@@ -288,7 +289,10 @@ class EtchingAmountGenerator:
             else: headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
         water_params = self.app._get_water_params() if hasattr(self, 'app') and hasattr(self.app, '_get_water_params') else {'viscosity': 1.0, 'surface_tension': 72.8, 'evaporation_rate': 0.0}
         water_params_dict = {i: water_params for i in [1, 2, 3]}
-        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        
+        # [優化] 啟用 fast_mode，並設定粒子縮放比例
+        fast_particle_scale = 0.3
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
         grid_size = 300
         etch_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
         film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
@@ -317,6 +321,10 @@ class EtchingAmountGenerator:
                     p_arm_id = engine.particles_arm_id[i]
                     actual_flow = current_proc.get('flow_rate_2' if p_arm_id == 3 else 'flow_rate', 500.0)
                     flow_bonus = imp_bonus * (actual_flow / 500.0)
+                    
+                    # [優化] 補償減少的粒子數，確保總沉積液體量不變
+                    flow_bonus *= (1.0 / fast_particle_scale)
+                    
                     _numba_deposit_liquid(film_matrix, conc_matrix, rel_x, rel_y, grid_radius, grid_size, dt, 1.0, flow_bonus)
             current_rpm = snapshot.get('rpm', 0)
             current_spin_decay = base_spin_decay * (1.0 + abs(current_rpm) / 500.0)
