@@ -25,6 +25,8 @@ class AutoTunerGUI:
         
         self.base_config = get_default_config()
         self.current_recipe = None
+        self.stop_tuning_flags = {"Etching": False, "PRE": False, "Charging": False}
+        self.is_tuning = {"Etching": False, "PRE": False, "Charging": False}
         
         # State for each tab
         self.tabs_state = {
@@ -166,10 +168,10 @@ class AutoTunerGUI:
         frame_run.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(frame_run, text="Tuning Trials:").pack(side="left", padx=5)
-        ent_trials = ttk.Entry(frame_run, width=8); ent_trials.insert(0, "5"); ent_trials.pack(side="left", padx=5)
+        ent_trials = ttk.Entry(frame_run, width=8); ent_trials.insert(0, "100"); ent_trials.pack(side="left", padx=5)
         self.tabs_state[tab_name]["ent_trials"] = ent_trials
         
-        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.start_tuning_thread(tab_name))
+        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.toggle_tuning(tab_name))
         btn_run.pack(side="right", padx=5)
         self.tabs_state[tab_name]["btn_run"] = btn_run
         
@@ -337,10 +339,10 @@ class AutoTunerGUI:
         frame_run.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(frame_run, text="Tuning Trials:").pack(side="left", padx=5)
-        ent_trials = ttk.Entry(frame_run, width=8); ent_trials.insert(0, "5"); ent_trials.pack(side="left", padx=5)
+        ent_trials = ttk.Entry(frame_run, width=8); ent_trials.insert(0, "100"); ent_trials.pack(side="left", padx=5)
         self.tabs_state[tab_name]["ent_trials"] = ent_trials
         
-        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.start_tuning_thread(tab_name))
+        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.toggle_tuning(tab_name))
         btn_run.pack(side="right", padx=5)
         self.tabs_state[tab_name]["btn_run"] = btn_run
         
@@ -399,26 +401,41 @@ class AutoTunerGUI:
             return True if self.current_recipe else False
         return False
 
-    def start_tuning_thread(self, tab_name):
-        if not self.fetch_latest_data():
-            messagebox.showwarning("Warning", "Failed to fetch recipe.")
-            return
+    def toggle_tuning(self, tab_name):
+        if not self.is_tuning[tab_name]:
+            # Start Tuning
+            if not self.fetch_latest_data():
+                messagebox.showwarning("Warning", "Failed to fetch recipe.")
+                return
 
-        if tab_name != "PRE" and self.tabs_state[tab_name]["exp_radius"] is None:
-            messagebox.showwarning("Warning", f"Please load experimental CSV for {tab_name} first!")
-            return
+            if tab_name != "PRE" and self.tabs_state[tab_name]["exp_radius"] is None:
+                messagebox.showwarning("Warning", f"Please load experimental CSV for {tab_name} first!")
+                return
+                
+            active = {k: v for k, v in self.tabs_state[tab_name]["param_vars"].items() if v['enabled'].get()}
+            if not active:
+                messagebox.showwarning("Warning", "Please select at least one parameter to tune.")
+                return
             
-        active = {k: v for k, v in self.tabs_state[tab_name]["param_vars"].items() if v['enabled'].get()}
-        if not active:
-            messagebox.showwarning("Warning", "Please select at least one parameter to tune.")
-            return
-        
-        trials = int(self.tabs_state[tab_name]["ent_trials"].get())
-        self.tabs_state[tab_name]["lbl_progress"].config(text=f"Progress: 0 / {trials}")
-        self.tabs_state[tab_name]["btn_run"].config(state="disabled")
-        self.tabs_state[tab_name]["lbl_status"].config(text="Optimization in progress...", foreground="red")
-        
-        threading.Thread(target=self.run_optimization, args=(tab_name, active, trials), daemon=True).start()
+            try:
+                trials = int(self.tabs_state[tab_name]["ent_trials"].get())
+            except ValueError:
+                messagebox.showwarning("Warning", "Please enter a valid integer for trials.")
+                return
+                
+            self.is_tuning[tab_name] = True
+            self.stop_tuning_flags[tab_name] = False
+            
+            self.tabs_state[tab_name]["lbl_progress"].config(text=f"Progress: 0 / {trials}")
+            self.tabs_state[tab_name]["btn_run"].config(text="🛑 Stop Auto Tuning")
+            self.tabs_state[tab_name]["lbl_status"].config(text="Optimization in progress...", foreground="red")
+            
+            threading.Thread(target=self.run_optimization, args=(tab_name, active, trials), daemon=True).start()
+        else:
+            # Stop Tuning
+            self.stop_tuning_flags[tab_name] = True
+            self.tabs_state[tab_name]["btn_run"].config(text="Stopping...", state="disabled")
+            self.tabs_state[tab_name]["lbl_status"].config(text="Waiting for current trial to finish...", foreground="orange")
 
     def run_optimization(self, tab_name, active_params, trials):
         search_space = {k: (float(v['min'].get()), float(v['max'].get())) for k, v in active_params.items()}
@@ -496,9 +513,17 @@ class AutoTunerGUI:
                 print(f"Trial Error: {e}")
                 return float('inf')
 
+        def stop_check_callback(study, trial):
+            if self.stop_tuning_flags[tab_name]:
+                study.stop()
+
         study = optuna.create_study(direction='minimize')
         study.enqueue_trial(initial_guess)
-        study.optimize(objective, n_trials=trials)
+        
+        try:
+            study.optimize(objective, n_trials=trials, callbacks=[stop_check_callback])
+        except Exception as e:
+            print(f"Optimization stopped or encountered error: {e}")
 
         best_config = self.base_config.copy()
         best_config.update(all_ui_guesses)
@@ -515,7 +540,8 @@ class AutoTunerGUI:
             best_result, _ = generator.run_fast_simulation(self.current_recipe, best_config)
             target = v_target_smooth
 
-        self.root.after(0, self.finish_tuning, tab_name, study.best_params, study.best_value, best_result, target)
+        was_stopped = self.stop_tuning_flags[tab_name]
+        self.root.after(0, self.finish_tuning, tab_name, study.best_params, study.best_value, best_result, target, was_stopped)
 
     def update_plot_radial(self, tab_name, sim_radial, v_target_smooth, trial_num=None):
         ax = self.tabs_state[tab_name]["ax"]
@@ -583,9 +609,11 @@ class AutoTunerGUI:
         else:
             messagebox.showwarning("Export Warning", "No matching parameters were found to export.")
 
-    def finish_tuning(self, tab_name, best_params, best_mse, best_result, target):
+    def finish_tuning(self, tab_name, best_params, best_mse, best_result, target, was_stopped=False):
+        self.is_tuning[tab_name] = False
+        self.tabs_state[tab_name]["btn_run"].config(text="🚀 Start Auto Tuning", state="normal")
+        
         trials = int(self.tabs_state[tab_name]["ent_trials"].get())
-        self.tabs_state[tab_name]["lbl_progress"].config(text=f"Progress: {trials} / {trials}")
         
         if tab_name == "PRE":
             final_count = len(best_result)
@@ -594,6 +622,10 @@ class AutoTunerGUI:
             except:
                 total_in = 10000.0
             pre_percent = ((total_in - final_count) / total_in) * 100
+            
+        if was_stopped:
+            self.tabs_state[tab_name]["lbl_status"].config(text=f"Stopped. Best MSE: {best_mse:.6f}" if tab_name != "PRE" else f"Stopped. PRE: {pre_percent:.2f}%", foreground="orange")
+        elif tab_name == "PRE":
             self.tabs_state[tab_name]["lbl_status"].config(text=f"Finished! PRE: {pre_percent:.2f}% (Rem: {final_count})", foreground="green")
         else:
             self.tabs_state[tab_name]["lbl_status"].config(text=f"Finished! MSE: {best_mse:.6f}", foreground="green")
@@ -614,14 +646,16 @@ class AutoTunerGUI:
             except:
                 total_in_val = 10000.0
             self.update_plot_scatter(tab_name, best_result, None, len(best_result), target, mode, total_in_val)
-            msg = f"Optimization finished!\nAchieved PRE: {pre_percent:.2f}% (Rem: {final_count})\n\nOptimal parameters:\n"
+            msg = f"Optimization {'stopped' if was_stopped else 'finished'}!\nAchieved PRE: {pre_percent:.2f}% (Rem: {final_count})\n\nOptimal parameters:\n"
         else:
             self.update_plot_radial(tab_name, best_result, target)
-            msg = f"Optimization finished! MSE: {best_mse:.6f}\n\nOptimal parameters for {tab_name}:\n"
+            msg = f"Optimization {'stopped' if was_stopped else 'finished'}! MSE: {best_mse:.6f}\n\nOptimal parameters for {tab_name}:\n"
 
         for k, v in best_params.items():
             msg += f"{k}: {v:.6e}\n"
-        messagebox.showinfo("Tuning Success", msg)
+            
+        title = "Tuning Stopped" if was_stopped else "Tuning Success"
+        messagebox.showinfo(title, msg)
 
 if __name__ == "__main__":
     root = tk.Tk()
