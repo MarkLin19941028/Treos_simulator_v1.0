@@ -348,24 +348,25 @@ class SimulationApp:
         # 連結到外部recipe_manager
         ttk.Button(io_frame, text="Import Recipe", command=self.recipe_manager.import_recipe).pack(side="left", padx=5)
         ttk.Button(io_frame, text="Export Recipe", command=self.recipe_manager.export_recipe).pack(side="left", padx=5)
+        
+        self.current_recipe_file_var = tk.StringVar(value="No recipe imported")
+        lbl_current_recipe = ttk.Label(io_frame, textvariable=self.current_recipe_file_var, foreground="gray")
+        lbl_current_recipe.pack(side="left", padx=15)
 
         report_frame = ttk.LabelFrame(content_frame, text="Reporting", padding="10")
         report_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
         # 第一列：基礎報告與工具
-        ttk.Button(report_frame, text="Simulation Report", command=self.export_simulation_report).grid(row=0, column=0, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="Generate Video", command=self.export_simulation_video).grid(row=0, column=1, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="Moving Pattern", command=self.moving_pattern_generator.export_nozzle_pattern).grid(row=0, column=2, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="Accumulation Heatmap", command=self.export_accumulation_heatmap).grid(row=0, column=3, padx=5, pady=2, sticky="ew")
+        ttk.Button(report_frame, text="Simulation Report", width=20, command=self.export_simulation_report).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Generate Video", width=20, command=self.export_simulation_video).grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Moving Pattern", width=20, command=self.moving_pattern_generator.export_nozzle_pattern).grid(row=0, column=2, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Accumulation Heatmap", width=20, command=self.export_accumulation_heatmap).grid(row=0, column=3, padx=5, pady=2, sticky="w")
         
         # 第二列：進階分析與調校工具
-        ttk.Button(report_frame, text="Etching Amount", command=self.export_etching_amount).grid(row=1, column=0, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="Particle Removal", command=self.export_pre_efficiency).grid(row=1, column=1, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="Charging", command=self.export_charging_simulation).grid(row=1, column=2, padx=5, pady=2, sticky="ew")
-        ttk.Button(report_frame, text="AutoTune", command=self.open_autotuner).grid(row=1, column=3, padx=5, pady=2, sticky="ew")
-
-        for i in range(4):
-            report_frame.columnconfigure(i, weight=1)
+        ttk.Button(report_frame, text="Etching Amount", width=20, command=self.export_etching_amount).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Particle Removal", width=20, command=self.export_pre_efficiency).grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Charging", width=20, command=self.export_charging_simulation).grid(row=1, column=2, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="AutoTune", width=20, command=self.open_autotuner).grid(row=1, column=3, padx=5, pady=2, sticky="w")
 
         global_frame = ttk.LabelFrame(content_frame, text="Global Parameters", padding="10")
         global_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)

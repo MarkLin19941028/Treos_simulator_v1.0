@@ -386,7 +386,8 @@ class AutoTunerGUI:
         path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
         if not path: return
         try:
-            data = np.loadtxt(path, delimiter=",", skiprows=1)
+            # Using encoding='utf-8-sig' to handle files saved with BOM and avoid cp950 decode errors
+            data = np.loadtxt(path, delimiter=",", skiprows=1, encoding='utf-8-sig')
             data = data[data[:, 0].argsort()]
             self.tabs_state[tab_name]["exp_radius"] = data[:, 0]
             self.tabs_state[tab_name]["exp_values"] = data[:, 1]
