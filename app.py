@@ -236,10 +236,7 @@ class SimulationApp:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        # 綁定滑鼠滾輪事件 (包含 Windows/macOS 和 Linux)
-        canvas.bind_all("<MouseWheel>", lambda e: self._on_mousewheel(e, canvas))
-        canvas.bind_all("<Button-4>", lambda e: self._on_mousewheel(e, canvas))
-        canvas.bind_all("<Button-5>", lambda e: self._on_mousewheel(e, canvas))
+        self.physics_canvas = canvas
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -327,10 +324,7 @@ class SimulationApp:
         v_scrollbar.grid(row=0, column=1, sticky="ns")
         h_scrollbar.grid(row=1, column=0, sticky="ew")
 
-        # 綁定滑鼠滾輪事件 (包含 Windows/macOS 和 Linux)
-        main_canvas.bind_all("<MouseWheel>", lambda e: self._on_mousewheel(e, main_canvas))
-        main_canvas.bind_all("<Button-4>", lambda e: self._on_mousewheel(e, main_canvas))
-        main_canvas.bind_all("<Button-5>", lambda e: self._on_mousewheel(e, main_canvas))
+        self.main_canvas = main_canvas
 
         self.scrollable_frame = ttk.Frame(main_canvas, padding="10")
         main_canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
@@ -418,6 +412,11 @@ class SimulationApp:
         self.recreate_process_widgets()
 
         self._on_water_setting_mode_change() # Call this to set the initial visibility
+
+        # 全域綁定滾輪事件
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.root.bind_all("<Button-4>", self._on_mousewheel)
+        self.root.bind_all("<Button-5>", self._on_mousewheel)
 
     def _create_callback(self, func, *args):
         return lambda new_value: func(*args)
@@ -542,16 +541,31 @@ class SimulationApp:
             self._on_spin_mode_change(i)
             self.recreate_step_entries(i)
 
-    def _on_mousewheel(self, event, canvas):
-        """根據不同作業系統處理滑鼠滾輪事件"""
-        if not canvas.winfo_exists():
+    def _on_mousewheel(self, event):
+        """根據不同作業系統處理滑鼠滾輪事件，動態判斷分頁並捲動"""
+        # 確認哪個分頁正在顯示
+        try:
+            current_tab = self.notebook.index(self.notebook.select())
+        except:
             return
-        # Windows & macOS 使用 event.delta
-        # Linux 通常使用 Button-4 (Up) and Button-5 (Down)
-        if event.num == 5 or event.delta < 0:
-            canvas.yview_scroll(1, "units")
-        elif event.num == 4 or event.delta > 0:
-            canvas.yview_scroll(-1, "units")
+
+        if current_tab == 0:
+            target_canvas = getattr(self, 'main_canvas', None)
+        elif current_tab == 1:
+            target_canvas = getattr(self, 'physics_canvas', None)
+        else:
+            target_canvas = None
+
+        if target_canvas and target_canvas.winfo_exists():
+            # 檢查滑鼠是否在 AutoTuner 或其他 Toplevel 上，如果在 Toplevel，不要在這裡搶滾輪事件
+            # 若不需要那麼嚴謹可不加，但為了相容性直接捲動目標 canvas
+            
+            # Windows & macOS 使用 event.delta
+            # Linux 通常使用 Button-4 (Up) and Button-5 (Down)
+            if event.num == 5 or event.delta < 0:
+                target_canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:
+                target_canvas.yview_scroll(-1, "units")
 
     def recreate_step_entries(self, process_index):
         proc_data = self.processes_data[process_index]

@@ -152,10 +152,15 @@ class ChargingGenerator:
         }
         wp_dict = {1: water_params, 2: water_params, 3: water_params}
         
-        # [優化] 啟用 fast_mode，並設定粒子縮放比例
-        fast_particle_scale = 0.3
+        # [優化] 啟用 fast_mode，並設定粒子縮放比例，確保生成率下限
+        max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
+        from constants import PARTICLE_SPAWN_MULTIPLIER
+        original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
+        target_rate = max(50.0, original_rate * 0.1)
+        fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
+
         engine = SimulationEngine(recipe, headless_arms, wp_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
-        
+
         grid_size = 300
         surface_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
         surface_buffer = np.zeros((grid_size, grid_size), dtype=np.float64)
@@ -168,8 +173,8 @@ class ChargingGenerator:
             spin = proc.get('spin_params', {})
             c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
             if float(c_max) > max_rpm: max_rpm = float(c_max)
-        
-        report_fps = max(100, int(max_rpm * 1.5))
+
+        report_fps = max(30, min(1000, int(max_rpm * 0.5)))
         recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])

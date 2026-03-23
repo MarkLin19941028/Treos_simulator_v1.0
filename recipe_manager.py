@@ -26,7 +26,7 @@ class RecipeManager:
 
             import csv
 
-            with open(filepath, 'w', encoding='utf-8', newline='') as f:
+            with open(filepath, 'w', encoding='utf-8-sig', newline='') as f:
                 writer = csv.writer(f)
                 
                 writer.writerow(["[GLOBAL]"])
@@ -74,6 +74,19 @@ class RecipeManager:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export recipe: {e}")
 
+    def _read_file_with_fallback(self, filepath):
+        """
+        嘗試以不同的編碼方式讀取檔案，解決 Excel 匯出造成的編碼問題
+        """
+        encodings = ['utf-8-sig', 'utf-8', 'cp1252', 'big5']
+        for enc in encodings:
+            try:
+                with open(filepath, 'r', encoding=enc) as f:
+                    return f.read(), enc
+            except UnicodeDecodeError:
+                continue
+        raise UnicodeDecodeError(f"Failed to decode file {filepath} with any of {encodings}")
+
     def import_recipe(self):
         """
         從 .csv (或舊版 .txt) 檔案匯入 Recipe，並更新 SimulationApp 的 UI 變數。
@@ -90,20 +103,27 @@ class RecipeManager:
             
             if filepath.endswith(".csv"):
                 import csv
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    for row in reader:
-                        if not row: continue
-                        if len(row) == 1 and row[0].startswith('[') and row[0].endswith(']'):
-                            section = row[0][1:-1]
-                            if section.startswith('PROCESS_'):
-                                current_process_dict = {'steps_data': {}}
-                                imported_processes.append(current_process_dict)
-                            else:
-                                current_process_dict = None
-                            continue
-                        
-                        if len(row) >= 2:
+                content, enc = self._read_file_with_fallback(filepath)
+                
+                import io
+                f = io.StringIO(content)
+                reader = csv.reader(f)
+                for raw_row in reader:
+                    if not raw_row: continue
+                    # 過濾掉空白欄位 (Excel 可能會塞入很多空白)
+                    row = [col for col in raw_row if col.strip() != ""]
+                    if not row: continue
+                    
+                    if row[0].startswith('[') and row[0].endswith(']'):
+                        section = row[0][1:-1]
+                        if section.startswith('PROCESS_'):
+                            current_process_dict = {'steps_data': {}}
+                            imported_processes.append(current_process_dict)
+                        else:
+                            current_process_dict = None
+                        continue
+                    
+                    if len(row) >= 2:
                             key, value = row[0].strip(), row[1].strip()
                             if current_process_dict is None:
                                 global_params[key] = value
@@ -121,8 +141,8 @@ class RecipeManager:
                                 else:
                                     current_process_dict[key] = value
             else:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
+                content, enc = self._read_file_with_fallback(filepath)
+                lines = content.splitlines()
                 for line in lines:
                     line = line.strip()
                     if not line or line.startswith('#'): continue

@@ -280,8 +280,8 @@ class EtchingAmountGenerator:
                 c_max = spin['rpm'] if spin['mode'] == 'Simple' else max(spin['start_rpm'], spin['end_rpm'])
                 if c_max > max_rpm: max_rpm = c_max
             # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
-            recipe['dynamic_report_fps'] = max(100, int(max_rpm * 1.5))
-            
+            recipe['dynamic_report_fps'] = max(30, min(1000, int(max_rpm * 0.5)))
+
         headless_arms = {}
         for i, geo in ARM_GEOMETRIES.items():
             if i == 2:
@@ -289,9 +289,13 @@ class EtchingAmountGenerator:
             else: headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
         water_params = self.app._get_water_params() if hasattr(self, 'app') and hasattr(self.app, '_get_water_params') else {'viscosity': 1.0, 'surface_tension': 72.8, 'evaporation_rate': 0.0}
         water_params_dict = {i: water_params for i in [1, 2, 3]}
-        
-        # [優化] 啟用 fast_mode，並設定粒子縮放比例
-        fast_particle_scale = 0.3
+
+        # [優化] 啟用 fast_mode，並設定粒子縮放比例，確保生成率下限
+        max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
+        from constants import PARTICLE_SPAWN_MULTIPLIER
+        original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
+        target_rate = max(50.0, original_rate * 0.1)
+        fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
         engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
         grid_size = 300
         etch_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)

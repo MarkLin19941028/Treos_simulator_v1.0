@@ -319,7 +319,7 @@ class SimulationEngine:
         if self.simulation_mode == 'full':
             if self.fast_mode:
                 # [優化] AutoTune 快速模式，忽略渲染連續性，確保物理計算穩定即可
-                SUB_STEPS = max(1, min(3, int(current_rpm / 300)))
+                SUB_STEPS = max(1, min(2, int(current_rpm / 600)))
             else:
                 # [優化] 動態計算子步數，與 WATER_RENDER_INTERPOLATION_LIMIT 掛鉤，改善高轉速連續性
                 SUB_STEPS = max(5, min(WATER_RENDER_INTERPOLATION_LIMIT, 5 + int(current_rpm / 40)))
