@@ -245,6 +245,10 @@ class SimulationApp:
         
         # --- 核心修改：遍歷定義檔生成 UI ---
         for category, params in PARAMETER_DEFINITIONS.items():
+            # 跳過只在 AutoTuner 顯示的分類
+            if category in ["Etching Amount", "Particle Removal", "Charging Simulation"]:
+                continue
+                
             # 建立分類外框
             labelframe = ttk.LabelFrame(scrollable_frame, text=category, padding=10)
             labelframe.grid(row=row_idx, column=0, sticky="ew", padx=10, pady=5)
@@ -252,7 +256,7 @@ class SimulationApp:
             # 使用 Grid 佈局，每行放兩個參數，下方加上說明文字
             inner_items = list(params.items())
             for i, (key, info) in enumerate(inner_items):
-                label_text, default_val, var_type, limit_range, description = info
+                label_text, default_val, var_type, limit_range, description, is_tunable = info
                 
                 # 計算位置：i=0,1 -> r=0; i=2,3 -> r=2 ... (每組佔用兩行，一行控制項，一行說明)
                 base_r = (i // 2) * 2
@@ -292,14 +296,17 @@ class SimulationApp:
             var.set(str(min_val)) # 重置為最小值
 
     def get_current_config(self):
-        """獲取當前 UI 中的所有配置"""
-        current_config = {}
+        """獲取當前 UI 中的所有配置，並合併預設配置"""
+        # 首先載入所有預設配置，包含被隱藏的 AutoTuner 參數
+        current_config = get_default_config()
+        
+        # 覆蓋 UI 中有顯示的參數
         for key, var in self.config_vars.items():
             try:
                 current_config[key] = float(var.get())
             except:
                 # 這裡理論上 _validate_range 會處理，但保險起見加個 fallback
-                current_config[key] = 0.0
+                pass
         return current_config
 
     def create_editor_widgets(self):
@@ -357,10 +364,7 @@ class SimulationApp:
         ttk.Button(report_frame, text="Accumulation Heatmap", width=20, command=self.export_accumulation_heatmap).grid(row=0, column=3, padx=5, pady=2, sticky="w")
         
         # 第二列：進階分析與調校工具
-        ttk.Button(report_frame, text="Etching Amount", width=20, command=self.export_etching_amount).grid(row=1, column=0, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="Particle Removal", width=20, command=self.export_pre_efficiency).grid(row=1, column=1, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="Charging", width=20, command=self.export_charging_simulation).grid(row=1, column=2, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="AutoTune", width=20, command=self.open_autotuner).grid(row=1, column=3, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="AutoTune", width=20, command=self.open_autotuner).grid(row=1, column=0, padx=5, pady=2, sticky="w")
 
         global_frame = ttk.LabelFrame(content_frame, text="Global Parameters", padding="10")
         global_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
@@ -768,7 +772,7 @@ class SimulationApp:
         finally:
             self._report_export_lock = False
 
-    def export_etching_amount(self):
+    def export_etching_amount(self, custom_config=None):
         if getattr(self, '_etching_export_lock', False):
             return
         self._etching_export_lock = True
@@ -823,7 +827,7 @@ class SimulationApp:
             except (AttributeError, ValueError):
                 current_multiplier = 1.0
 
-            current_config = self.get_current_config()
+            current_config = custom_config if custom_config else self.get_current_config()
             generator = EtchingAmountGenerator(self)
             success = generator.generate(
                 parsed_recipe, filepath, 
@@ -845,7 +849,7 @@ class SimulationApp:
         finally:
             self._etching_export_lock = False
 
-    def export_pre_efficiency(self):
+    def export_pre_efficiency(self, custom_config=None):
         if getattr(self, '_pre_export_lock', False):
             return
         self._pre_export_lock = True
@@ -895,7 +899,7 @@ class SimulationApp:
             progress_bar.pack(pady=10)
             progress_widgets = {'window': progress_window, 'bar': progress_bar, 'label': progress_label}
 
-            current_config = self.get_current_config()
+            current_config = custom_config if custom_config else self.get_current_config()
             generator = PREGenerator(self)
             success = generator.generate(parsed_recipe, filepath, config=current_config, progress_widgets=progress_widgets)
 
@@ -1025,7 +1029,7 @@ class SimulationApp:
         finally:
             self._heatmap_export_lock = False
 
-    def export_charging_simulation(self):
+    def export_charging_simulation(self, custom_config=None):
         if getattr(self, '_charging_export_lock', False):
             return
         self._charging_export_lock = True
@@ -1075,7 +1079,7 @@ class SimulationApp:
             progress_bar.pack(pady=10)
             progress_widgets = {'window': progress_window, 'bar': progress_bar, 'label': progress_label}
 
-            current_config = self.get_current_config()
+            current_config = custom_config if custom_config else self.get_current_config()
             generator = ChargingGenerator(self)
             try:
                 current_multiplier = float(self.speed_var.get().replace('x', ''))

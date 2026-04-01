@@ -94,11 +94,11 @@ class PREGenerator:
             'evaporation_rate': water_params['evaporation_rate']
         } for i in [1, 2, 3]}
 
-        # [優化] 啟用 fast_mode，並設定粒子縮放比例，確保生成率下限
+        # [優化] 啟用 fast_mode，並設定粒子縮放比例，確保生成率下限以消弭顆粒感
         max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
         from constants import PARTICLE_SPAWN_MULTIPLIER
         original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
-        target_rate = max(50.0, original_rate * 0.1)
+        target_rate = max(200.0, original_rate * 0.5)
         fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
 
         engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
@@ -115,14 +115,14 @@ class PREGenerator:
         dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
         
         # Determine dt based on tuning
-        # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
+        # [優化] 平衡 FPS 與精細度：確保顆粒感消除
         max_rpm = 0
         for proc in recipe['processes']:
             spin = proc.get('spin_params', {})
             c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
             if float(c_max) > max_rpm: max_rpm = float(c_max)
         
-        report_fps = max(30, min(1000, int(max_rpm * 0.5)))
+        report_fps = max(200, min(2000, int(max_rpm * 1.0)))
         recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
@@ -213,7 +213,25 @@ class PREGenerator:
             'evaporation_rate': water_params['evaporation_rate']
         } for i in [1, 2, 3]}
 
-        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+        # [對齊 AutoTuner 的加速邏輯] (優化精細度消弭顆粒感)
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc.get('spin_params', {})
+            c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
+            if float(c_max) > max_rpm: max_rpm = float(c_max)
+
+        report_fps = max(200, min(2000, int(max_rpm * 1.0)))
+        recipe['dynamic_report_fps'] = report_fps
+        dt = 1.0 / report_fps
+
+        # 啟用 fast_mode，並設定粒子縮放比例
+        max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
+        from constants import PARTICLE_SPAWN_MULTIPLIER
+        original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
+        target_rate = max(200.0, original_rate * 0.5)
+        fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
+
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
         
         # [新增] 表面張力增益計算
         # 從 UI 獲取實際表面張力 (預設純水 72.8 mN/m)
@@ -225,9 +243,6 @@ class PREGenerator:
         
         grid_size = 300
         dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
-        
-        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
-        dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
         sim_clock = 0.0
 
@@ -309,6 +324,9 @@ class PREGenerator:
                     eta = math.exp(-gamma_eff * r_val)
                     dose_contribution = k_raw * eta * dt
                     
+                    # 補償減少的粒子數，確保總能量不變
+                    dose_contribution *= (1.0 / fast_particle_scale)
+
                     # 4. [修改] 呼叫 Numba 核心
                     _numba_apply_pre_kernel(
                         dose_matrix, 

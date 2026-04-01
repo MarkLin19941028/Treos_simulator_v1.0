@@ -96,6 +96,17 @@ class EtchingAmountGenerator:
         sat_threshold = config.get('ETCHING_SATURATION_THRESHOLD', ETCHING_SATURATION_THRESHOLD)
         shear_coeff = config.get('ETCHING_SHEAR_COEFF', 0.0001)
         global_scale = config.get('ETCHING_GLOBAL_SCALE', 1.0)
+        # [對齊 AutoTuner 的加速邏輯] 
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc.get('spin_params', {})
+            c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
+            if float(c_max) > max_rpm: max_rpm = float(c_max)
+        
+        report_fps = max(30, min(1000, int(max_rpm * 0.5)))
+        recipe['dynamic_report_fps'] = report_fps
+        dt = 1.0 / report_fps
+
         headless_arms = {}
         for i, geo in ARM_GEOMETRIES.items():
             if i == 2:
@@ -107,7 +118,16 @@ class EtchingAmountGenerator:
                 headless_arms[i] = DispenseArm(i, geo['pivot'], geo['home'], geo['length'], None, None)
         water_params = self.app._get_water_params()
         water_params_dict = {i: water_params for i in [1, 2, 3]}
-        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config)
+
+        # 啟用 fast_mode，並設定粒子縮放比例
+        max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
+        from constants import PARTICLE_SPAWN_MULTIPLIER
+        original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
+        target_rate = max(200.0, original_rate * 0.5)
+        fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
+
+        engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
+        
         grid_size = 300
         etch_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
         film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
@@ -116,8 +136,6 @@ class EtchingAmountGenerator:
         record_interval = (1.0 / VIDEO_FPS) * play_speed_multiplier
         next_record_time = 0.0
         video_buffer = []
-        report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
-        dt = 1.0 / report_fps
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
         sim_clock = 0.0
         progress_display_interval = 0.5
@@ -153,6 +171,10 @@ class EtchingAmountGenerator:
                     p_arm_id = engine.particles_arm_id[i]
                     actual_flow = current_proc.get('flow_rate_2' if p_arm_id == 3 else 'flow_rate', 500.0)
                     flow_bonus = imp_bonus * (actual_flow / 500.0)
+                    
+                    # 補償減少的粒子數，確保總沉積液體量不變
+                    flow_bonus *= (1.0 / fast_particle_scale)
+                    
                     _numba_deposit_liquid(film_matrix, conc_matrix, rel_x, rel_y, grid_radius, grid_size, dt, 1.0, flow_bonus)
             current_rpm = snapshot.get('rpm', 0)
             current_spin_decay = base_spin_decay * (1.0 + abs(current_rpm) / 500.0)
@@ -294,7 +316,7 @@ class EtchingAmountGenerator:
         max_flow = max([proc.get('flow_rate', 500.0) for proc in recipe['processes']])
         from constants import PARTICLE_SPAWN_MULTIPLIER
         original_rate = max_flow * 0.5 * PARTICLE_SPAWN_MULTIPLIER
-        target_rate = max(50.0, original_rate * 0.1)
+        target_rate = max(200.0, original_rate * 0.5)
         fast_particle_scale = min(1.0, target_rate / max(original_rate, 1.0))
         engine = SimulationEngine(recipe, headless_arms, water_params_dict, headless=True, config=config, fast_mode=True, fast_particle_scale=fast_particle_scale)
         grid_size = 300

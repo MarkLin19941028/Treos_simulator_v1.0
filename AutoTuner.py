@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from scipy.interpolate import UnivariateSpline
@@ -139,29 +140,73 @@ class AutoTunerGUI:
 
         headers = ["Enable", "Parameter Name", "Default", "Min Bound", "Max Bound", "Initial Guess"]
         for col, text in enumerate(headers):
-            ttk.Label(scroll_frame, text=text, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=8, pady=5)
+            ttk.Label(scroll_frame, text=text, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=2, pady=2)
 
         row = 1
         filter_keyword = tab_name if tab_name != "Charging" else "Charging"
+        
+        tunable_params = []
+        fixed_params = []
+
         for category, params in PARAMETER_DEFINITIONS.items():
             if filter_keyword in category or (tab_name == "Charging" and "Fluid" in category):
                 for key, info in params.items():
-                    # For charging, skip non-tuning params if necessary, but here we list all
-                    label_name, default_val = info[0], info[1]
-                    var_enabled = tk.BooleanVar(value=False)
-                    ttk.Checkbutton(scroll_frame, variable=var_enabled).grid(row=row, column=0)
-                    ttk.Label(scroll_frame, text=label_name).grid(row=row, column=1, sticky="w")
-                    ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2)
-                    
-                    if default_val == 0: default_val = 1e-10
-                    abs_val = abs(default_val)
-                    ent_min = ttk.Entry(scroll_frame, width=10); ent_min.insert(0, str(-abs_val * 10.0 if default_val < 0 else abs_val * 0.01))
-                    ent_max = ttk.Entry(scroll_frame, width=10); ent_max.insert(0, str(abs_val * 0.01 if default_val < 0 else abs_val * 100.0))
-                    ent_guess = ttk.Entry(scroll_frame, width=10); ent_guess.insert(0, str(default_val))
-                    
-                    ent_min.grid(row=row, column=3, padx=5); ent_max.grid(row=row, column=4, padx=5); ent_guess.grid(row=row, column=5, padx=5)
-                    self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
-                    row += 1
+                    if info[5]: # is_tunable
+                        tunable_params.append((key, info))
+                    else:
+                        fixed_params.append((key, info))
+
+        # Render Tunable Group
+        if tunable_params:
+            ttk.Label(scroll_frame, text="--- Tunable Parameters ---", font=("Arial", 9, "bold"), foreground="blue").grid(row=row, column=0, columnspan=6, pady=(10, 5), sticky="w")
+            row += 1
+            for key, info in tunable_params:
+                label_name, default_val, var_type, limit_range, description, is_tunable = info
+                var_enabled = tk.BooleanVar(value=False)
+                ttk.Checkbutton(scroll_frame, variable=var_enabled).grid(row=row, column=0, pady=(2, 0))
+                
+                lbl_param = ttk.Label(scroll_frame, text=label_name)
+                lbl_param.grid(row=row, column=1, sticky="w", pady=(2, 0))
+                ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2, pady=(2, 0))
+                
+                min_val, max_val = limit_range
+                ent_min = ttk.Entry(scroll_frame, width=8); ent_min.insert(0, str(min_val))
+                ent_max = ttk.Entry(scroll_frame, width=8); ent_max.insert(0, str(max_val))
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
+                self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
+                
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
+                row += 2
+
+        # Render Fixed Group
+        if fixed_params:
+            ttk.Label(scroll_frame, text="--- Fixed (Physical) Parameters ---", font=("Arial", 9, "bold"), foreground="brown").grid(row=row, column=0, columnspan=6, pady=(10, 5), sticky="w")
+            row += 1
+            for key, info in fixed_params:
+                label_name, default_val, var_type, limit_range, description, is_tunable = info
+                # Fixed parameters are not enabled for tuning
+                var_enabled = tk.BooleanVar(value=False)
+                
+                ttk.Label(scroll_frame, text="Fixed", font=("Arial", 8, "italic"), foreground="gray").grid(row=row, column=0, pady=(2, 0))
+                
+                lbl_param = ttk.Label(scroll_frame, text=label_name)
+                lbl_param.grid(row=row, column=1, sticky="w", pady=(2, 0))
+                ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2, pady=(2, 0))
+                
+                # Still show entries but maybe emphasize they are initial settings
+                ent_min = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_min.insert(0, "N/A")
+                ent_max = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_max.insert(0, "N/A")
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
+                self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
+                
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
+                row += 2
 
         # 3. Execution Control
         frame_run = ttk.Frame(left_frame, padding=10)
@@ -171,7 +216,7 @@ class AutoTunerGUI:
         ent_trials = ttk.Entry(frame_run, width=8); ent_trials.insert(0, "100"); ent_trials.pack(side="left", padx=5)
         self.tabs_state[tab_name]["ent_trials"] = ent_trials
         
-        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.toggle_tuning(tab_name))
+        btn_run = ttk.Button(frame_run, text="🚀 Start Auto Tuning", command=lambda: self.toggle_tuning(tab_name), state="disabled")
         btn_run.pack(side="right", padx=5)
         self.tabs_state[tab_name]["btn_run"] = btn_run
         
@@ -186,7 +231,7 @@ class AutoTunerGUI:
         lbl_status.pack(side="right", padx=5)
         self.tabs_state[tab_name]["lbl_status"] = lbl_status
 
-        btn_export = ttk.Button(left_frame, text="📥 Export Parameters to Recipe Editor", command=lambda: self.export_to_recipe(tab_name))
+        btn_export = ttk.Button(left_frame, text="📥 Export Simulation Result", command=lambda: self.export_simulation_result(tab_name))
         btn_export.pack(fill="x", padx=15, pady=10)
 
         # Right Plot Area
@@ -313,26 +358,69 @@ class AutoTunerGUI:
 
         headers = ["Enable", "Parameter Name", "Default", "Min Bound", "Max Bound", "Initial Guess"]
         for col, text in enumerate(headers):
-            ttk.Label(scroll_frame, text=text, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=8, pady=5)
+            ttk.Label(scroll_frame, text=text, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=2, pady=2)
 
         row = 1
+        tunable_params = []
+        fixed_params = []
+
         for category, params in PARAMETER_DEFINITIONS.items():
             if "Particle Removal" in category:
                 for key, info in params.items():
-                    label_name, default_val = info[0], info[1]
-                    var_enabled = tk.BooleanVar(value=False)
-                    ttk.Checkbutton(scroll_frame, variable=var_enabled).grid(row=row, column=0)
-                    ttk.Label(scroll_frame, text=label_name).grid(row=row, column=1, sticky="w")
-                    ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2)
-                    
-                    abs_val = abs(default_val) if default_val != 0 else 1.0
-                    ent_min = ttk.Entry(scroll_frame, width=10); ent_min.insert(0, str(abs_val * 0.01))
-                    ent_max = ttk.Entry(scroll_frame, width=10); ent_max.insert(0, str(abs_val * 100.0))
-                    ent_guess = ttk.Entry(scroll_frame, width=10); ent_guess.insert(0, str(default_val))
-                    
-                    ent_min.grid(row=row, column=3, padx=5); ent_max.grid(row=row, column=4, padx=5); ent_guess.grid(row=row, column=5, padx=5)
-                    self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
-                    row += 1
+                    if info[5]: # is_tunable
+                        tunable_params.append((key, info))
+                    else:
+                        fixed_params.append((key, info))
+
+        # Render Tunable Group
+        if tunable_params:
+            ttk.Label(scroll_frame, text="--- Tunable Parameters ---", font=("Arial", 9, "bold"), foreground="blue").grid(row=row, column=0, columnspan=6, pady=(10, 5), sticky="w")
+            row += 1
+            for key, info in tunable_params:
+                label_name, default_val, var_type, limit_range, description, is_tunable = info
+                var_enabled = tk.BooleanVar(value=False)
+                ttk.Checkbutton(scroll_frame, variable=var_enabled).grid(row=row, column=0, pady=(2, 0))
+                
+                lbl_param = ttk.Label(scroll_frame, text=label_name)
+                lbl_param.grid(row=row, column=1, sticky="w", pady=(2, 0))
+                ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2, pady=(2, 0))
+                
+                min_val, max_val = limit_range
+                ent_min = ttk.Entry(scroll_frame, width=8); ent_min.insert(0, str(min_val))
+                ent_max = ttk.Entry(scroll_frame, width=8); ent_max.insert(0, str(max_val))
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
+                self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
+                
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
+                row += 2
+
+        # Render Fixed Group
+        if fixed_params:
+            ttk.Label(scroll_frame, text="--- Fixed (Physical) Parameters ---", font=("Arial", 9, "bold"), foreground="brown").grid(row=row, column=0, columnspan=6, pady=(10, 5), sticky="w")
+            row += 1
+            for key, info in fixed_params:
+                label_name, default_val, var_type, limit_range, description, is_tunable = info
+                var_enabled = tk.BooleanVar(value=False)
+                
+                ttk.Label(scroll_frame, text="Fixed", font=("Arial", 8, "italic"), foreground="gray").grid(row=row, column=0, pady=(2, 0))
+                
+                lbl_param = ttk.Label(scroll_frame, text=label_name)
+                lbl_param.grid(row=row, column=1, sticky="w", pady=(2, 0))
+                ttk.Label(scroll_frame, text=str(default_val)).grid(row=row, column=2, pady=(2, 0))
+                
+                ent_min = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_min.insert(0, "N/A")
+                ent_max = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_max.insert(0, "N/A")
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
+                self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
+                
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
+                row += 2
 
         # 3. Execution Control
         frame_run = ttk.Frame(left_frame, padding=10)
@@ -357,7 +445,7 @@ class AutoTunerGUI:
         lbl_status.pack(side="right", padx=5)
         self.tabs_state[tab_name]["lbl_status"] = lbl_status
 
-        btn_export = ttk.Button(left_frame, text="📥 Export Parameters to Recipe Editor", command=lambda: self.export_to_recipe(tab_name))
+        btn_export = ttk.Button(left_frame, text="📥 Export Simulation Result", command=lambda: self.export_simulation_result(tab_name))
         btn_export.pack(fill="x", padx=15, pady=10)
 
         # Right Plot Area
@@ -370,7 +458,7 @@ class AutoTunerGUI:
         ax.set_title(self.tabs_state[tab_name]["plot_title"])
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
-        wafer = plt.Circle((0, 0), 150, color='#007bff', fill=False, lw=2, alpha=0.5)
+        wafer = patches.Circle((0, 0), 150, color='#007bff', fill=False, lw=2, alpha=0.5)
         ax.add_artist(wafer)
         ax.set_xlim(-160, 160)
         ax.set_ylim(-160, 160)
@@ -393,6 +481,10 @@ class AutoTunerGUI:
             self.tabs_state[tab_name]["exp_values"] = data[:, 1]
             self.tabs_state[tab_name]["spline_target"] = UnivariateSpline(data[:, 0], data[:, 1], k=1.0, s=0.0)
             label_widget.config(text=f"Exp CSV: {os.path.basename(path)}", foreground="black")
+            
+            # Enable the Start Auto Tuning button once experimental data is loaded successfully
+            if "btn_run" in self.tabs_state[tab_name]:
+                self.tabs_state[tab_name]["btn_run"].config(state="normal")
         except Exception as e: messagebox.showerror("Error", f"Failed to load CSV: {e}")
 
     def fetch_latest_data(self):
@@ -470,6 +562,9 @@ class AutoTunerGUI:
             generator = ChargingGenerator(self.main_app)
 
         def objective(trial):
+            if not self.root.winfo_exists() or self.stop_tuning_flags[tab_name]:
+                raise optuna.exceptions.TrialPruned()
+
             config = self.base_config.copy()
             config.update(all_ui_guesses)
             for key, (low, high) in search_space.items():
@@ -508,14 +603,20 @@ class AutoTunerGUI:
                     if (trial.number + 1) % 2 == 0 or (trial.number + 1) == trials:
                         self.root.after(0, self.update_plot_radial, tab_name, sim_radial, v_target_smooth, trial.number)
 
-                self.root.after(0, lambda: self.tabs_state[tab_name]["lbl_progress"].config(text=f"Progress: {trial.number + 1} / {trials}"))
+                if self.root.winfo_exists():
+                    try:
+                        self.root.after(0, lambda: self.tabs_state[tab_name]["lbl_progress"].config(text=f"Progress: {trial.number + 1} / {trials}"))
+                    except tk.TclError:
+                        pass
                 return mse
+            except optuna.exceptions.TrialPruned:
+                raise
             except Exception as e: 
                 print(f"Trial Error: {e}")
                 return float('inf')
 
         def stop_check_callback(study, trial):
-            if self.stop_tuning_flags[tab_name]:
+            if not self.root.winfo_exists() or self.stop_tuning_flags[tab_name]:
                 study.stop()
 
         study = optuna.create_study(direction='minimize')
@@ -526,9 +627,18 @@ class AutoTunerGUI:
         except Exception as e:
             print(f"Optimization stopped or encountered error: {e}")
 
+        if not self.root.winfo_exists():
+            return
+
         best_config = self.base_config.copy()
         best_config.update(all_ui_guesses)
-        best_config.update(study.best_params)
+        if len(study.trials) > 0 and study.best_trial is not None:
+            best_config.update(study.best_params)
+            best_value = study.best_value
+            best_params = study.best_params
+        else:
+            best_value = float('inf')
+            best_params = {}
         
         if tab_name == "Etching":
             best_matrix, _ = generator.run_fast_simulation(self.current_recipe, best_config)
@@ -542,75 +652,102 @@ class AutoTunerGUI:
             target = v_target_smooth
 
         was_stopped = self.stop_tuning_flags[tab_name]
-        self.root.after(0, self.finish_tuning, tab_name, study.best_params, study.best_value, best_result, target, was_stopped)
+        if self.root.winfo_exists():
+            self.root.after(0, self.finish_tuning, tab_name, best_params, best_value, best_result, target, was_stopped)
 
     def update_plot_radial(self, tab_name, sim_radial, v_target_smooth, trial_num=None):
-        ax = self.tabs_state[tab_name]["ax"]
-        ax.clear()
-        
-        ax.scatter(self.tabs_state[tab_name]["exp_radius"], self.tabs_state[tab_name]["exp_values"], color='red', label='Exp Data', s=30, alpha=0.6, zorder=5)
-        ax.plot(self.tabs_state[tab_name]["target_radius_range"], v_target_smooth, color='orange', linestyle='--', label='Spline Target', zorder=2)
-        ax.plot(np.arange(len(sim_radial)), sim_radial, color='blue', linewidth=2, label='Current Sim', zorder=3)
-        
-        title = self.tabs_state[tab_name]["plot_title"] + (f" (Trial: {trial_num + 1})" if trial_num is not None else "")
-        ax.set_title(title)
-        ax.set_xlabel("Radius (mm)")
-        ax.set_ylabel(self.tabs_state[tab_name]["ylabel"])
-        ax.set_xlim(-5, 155)
-        ax.legend(loc='upper left')
-        ax.grid(True, linestyle='--', alpha=0.6)
-        self.tabs_state[tab_name]["canvas"].draw()
+        if not self.root.winfo_exists():
+            return
+        try:
+            canvas = self.tabs_state[tab_name]["canvas"]
+            if not canvas.get_tk_widget().winfo_exists():
+                return
+                
+            ax = self.tabs_state[tab_name]["ax"]
+            ax.clear()
+            
+            ax.scatter(self.tabs_state[tab_name]["exp_radius"], self.tabs_state[tab_name]["exp_values"], color='red', label='Exp Data', s=30, alpha=0.6, zorder=5)
+            ax.plot(self.tabs_state[tab_name]["target_radius_range"], v_target_smooth, color='orange', linestyle='--', label='Spline Target', zorder=2)
+            ax.plot(np.arange(len(sim_radial)), sim_radial, color='blue', linewidth=2, label='Current Sim', zorder=3)
+            
+            title = self.tabs_state[tab_name]["plot_title"] + (f" (Trial: {trial_num + 1})" if trial_num is not None else "")
+            ax.set_title(title)
+            ax.set_xlabel("Radius (mm)")
+            ax.set_ylabel(self.tabs_state[tab_name]["ylabel"])
+            ax.set_xlim(-5, 155)
+            ax.legend(loc='upper left')
+            ax.grid(True, linestyle='--', alpha=0.6)
+            
+            # 使用 draw_idle 替代 draw 以提升執行緒安全性，避免視窗關閉時發生例外
+            canvas.draw_idle()
+        except tk.TclError:
+            pass
 
     def update_plot_scatter(self, tab_name, defects, trial_num=None, sim_count=0, target_val=0, mode="count", total_in=10000.0):
-        ax = self.tabs_state[tab_name]["ax"]
-        ax.clear()
-        
-        ax.set_aspect('equal')
-        wafer = plt.Circle((0, 0), 150, color='#007bff', fill=False, lw=2, alpha=0.5)
-        ax.add_artist(wafer)
-        
-        if len(defects) > 0:
-            sizes = np.clip(defects[:, 2] * 0.3, 1, 50)
-            ax.scatter(defects[:, 0], defects[:, 1], s=sizes, c='red', alpha=0.6, edgecolors='none', label='Remaining Defects')
+        if not self.root.winfo_exists():
+            return
+        try:
+            canvas = self.tabs_state[tab_name]["canvas"]
+            if not canvas.get_tk_widget().winfo_exists():
+                return
+                
+            ax = self.tabs_state[tab_name]["ax"]
+            ax.clear()
             
-        if mode == "count":
-            title = f"Defect Map (Sim: {sim_count} | Target: {int(target_val)})"
-        else:
-            sim_pre = ((total_in - sim_count) / total_in) * 100
-            title = f"Defect Map (Sim PRE: {sim_pre:.2f}% | Target: {target_val}%)"
+            ax.set_aspect('equal')
+            wafer = patches.Circle((0, 0), 150, color='#007bff', fill=False, lw=2, alpha=0.5)
+            ax.add_artist(wafer)
             
-        if trial_num is not None: title += f" [Trial: {trial_num + 1}]"
-        
-        ax.set_title(title)
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_xlim(-160, 160)
-        ax.set_ylim(-160, 160)
-        ax.grid(True, linestyle=':', alpha=0.3)
-        if len(defects) > 0: ax.legend(loc='upper right')
-        self.tabs_state[tab_name]["canvas"].draw()
+            if len(defects) > 0:
+                sizes = np.clip(defects[:, 2] * 0.3, 1, 50)
+                ax.scatter(defects[:, 0], defects[:, 1], s=sizes, c='red', alpha=0.6, edgecolors='none', label='Remaining Defects')
+                
+            if mode == "count":
+                title = f"Defect Map (Sim: {sim_count} | Target: {int(target_val)})"
+            else:
+                sim_pre = ((total_in - sim_count) / total_in) * 100
+                title = f"Defect Map (Sim PRE: {sim_pre:.2f}% | Target: {target_val}%)"
+                
+            if trial_num is not None: title += f" [Trial: {trial_num + 1}]"
+            
+            ax.set_title(title)
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.set_xlim(-160, 160)
+            ax.set_ylim(-160, 160)
+            ax.grid(True, linestyle=':', alpha=0.3)
+            if len(defects) > 0: ax.legend(loc='upper right')
+            
+            # 使用 draw_idle 替代 draw 以提升執行緒安全性
+            canvas.draw_idle()
+        except tk.TclError:
+            pass
 
-    def export_to_recipe(self, tab_name):
+    def export_simulation_result(self, tab_name):
         if not self.main_app:
             messagebox.showerror("Error", "Main application reference not found.")
             return
-            
-        exported_count = 0
+
+        # 收集當前 AutoTuner 中的參數覆蓋值
+        custom_config = self.main_app.get_current_config()
         for key, vars in self.tabs_state[tab_name]["param_vars"].items():
             try:
                 val = float(vars['guess'].get())
-                if key in self.main_app.config_vars:
-                    self.main_app.config_vars[key].set(str(val))
-                    exported_count += 1
+                custom_config[key] = val
             except ValueError:
                 continue
-                
-        if exported_count > 0:
-            messagebox.showinfo("Export Successful", f"Successfully exported {exported_count} parameters to the Recipe Editor.")
-        else:
-            messagebox.showwarning("Export Warning", "No matching parameters were found to export.")
+
+        # 根據不同的 tab 呼叫對應的導出函式
+        if tab_name == "Etching":
+            self.main_app.export_etching_amount(custom_config=custom_config)
+        elif tab_name == "PRE":
+            self.main_app.export_pre_efficiency(custom_config=custom_config)
+        elif tab_name == "Charging":
+            self.main_app.export_charging_simulation(custom_config=custom_config)
 
     def finish_tuning(self, tab_name, best_params, best_mse, best_result, target, was_stopped=False):
+        if not self.root.winfo_exists():
+            return
         self.is_tuning[tab_name] = False
         self.tabs_state[tab_name]["btn_run"].config(text="🚀 Start Auto Tuning", state="normal")
         
