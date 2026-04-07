@@ -900,8 +900,19 @@ class SimulationApp:
             progress_widgets = {'window': progress_window, 'bar': progress_bar, 'label': progress_label}
 
             current_config = custom_config if custom_config else self.get_current_config()
+            
+            try:
+                current_multiplier = float(self.speed_var.get().replace('x', ''))
+            except (AttributeError, ValueError):
+                current_multiplier = 1.0
+
             generator = PREGenerator(self)
-            success = generator.generate(parsed_recipe, filepath, config=current_config, progress_widgets=progress_widgets)
+            success = generator.generate(
+                parsed_recipe, filepath, 
+                config=current_config, 
+                progress_widgets=progress_widgets,
+                play_speed_multiplier=current_multiplier
+            )
 
             if progress_window.winfo_exists():
                 progress_window.destroy()

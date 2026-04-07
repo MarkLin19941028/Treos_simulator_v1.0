@@ -126,25 +126,26 @@ class PREGenerator:
         dp = np.random.lognormal(mean=2.8, sigma=0.4, size=count) 
         return np.stack((rs * np.cos(phis), rs * np.sin(phis), dp), axis=1)
 
-    def generate(self, recipe, filepath, config=None, progress_widgets=None):
+    def generate(self, recipe, filepath, config=None, progress_widgets=None, play_speed_multiplier=1.0):
         """ 標準模擬入口：包含進度條與檔案輸出 """
-        dose_matrix, final_defects = self._run_core_simulation(
-            recipe, config, progress_widgets=progress_widgets, fast_mode=False
+        dose_matrix, final_defects, video_buffer = self._run_core_simulation(
+            recipe, config, progress_widgets=progress_widgets, fast_mode=False, 
+            play_speed_multiplier=play_speed_multiplier
         )
         if dose_matrix is None: return False
         
         # 呼叫輸出方法
-        self._export_results(dose_matrix, final_defects, filepath, config=config)
+        self._export_results(dose_matrix, final_defects, filepath, config=config, video_buffer=video_buffer)
         return True
 
     def run_fast_simulation(self, recipe, config):
         """ 快速調機入口：無輸出，啟用 fast_mode 加速 """
-        dose_matrix, final_defects = self._run_core_simulation(
+        dose_matrix, final_defects, _ = self._run_core_simulation(
             recipe, config, progress_widgets=None, fast_mode=True
         )
         return dose_matrix, final_defects, None
 
-    def _run_core_simulation(self, recipe, config=None, progress_widgets=None, fast_mode=False):
+    def _run_core_simulation(self, recipe, config=None, progress_widgets=None, fast_mode=False, play_speed_multiplier=1.0):
         """ 核心物理模擬主迴圈 (與 EtchingAmountGenerator 結構對齊) """
         if config is None:
             from simulation_config_def import get_default_config
@@ -207,6 +208,12 @@ class PREGenerator:
         grid_size = int(WAFER_RADIUS * 2)
         dose_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
         
+        # 影片同步設定
+        VIDEO_FPS = 30.0
+        record_interval = (1.0 / VIDEO_FPS) * play_speed_multiplier
+        next_record_time = 0.0
+        video_buffer = []
+
         # 4. 初始化缺陷顆粒
         incoming_raw = self._generate_incoming_defects(pre_defect_count)
         particles_master = np.zeros((pre_defect_count, 5), dtype=np.float64)
@@ -227,6 +234,11 @@ class PREGenerator:
             snapshot = engine.update(dt) 
             sim_clock += dt
             
+            # 影片快照 (僅在非 fast_mode 下記錄)
+            if not fast_mode and sim_clock >= next_record_time:
+                video_buffer.append({'dose': dose_matrix.copy(), 'time': sim_clock})
+                next_record_time += record_interval
+
             if progress_widgets and (sim_clock - last_progress_time >= 0.5 or snapshot.get('is_finished')):
                 try:
                     p_bar, p_label = progress_widgets['bar'], progress_widgets['label']
@@ -270,9 +282,9 @@ class PREGenerator:
                 break
 
         final_defects = particles_master[particles_master[:, 3] < 2.0][:, :3]
-        return dose_matrix, final_defects
+        return dose_matrix, final_defects, video_buffer
 
-    def _export_results(self, matrix, final_defects, filepath, config=None):
+    def _export_results(self, matrix, final_defects, filepath, config=None, video_buffer=None):
         """ 處理圖表輸出 """
         base_path, _ = os.path.splitext(filepath)
         real_base = base_path.replace("_Cleaning_Dose", "")
@@ -357,6 +369,28 @@ class PREGenerator:
         # 4. 輸出 CSV
         header = f"Cleaning Dose Data (Transport Model), Redep_Base: {config.get('PRE_REDEP_COEFF', 0.05)}"
         np.savetxt(csv_path, data, delimiter=",", fmt='%.6f', header=header)
+
+        # 5. 輸出影片
+        if video_buffer:
+            video_path = filepath.replace(".png", "_CleaningView.mp4")
+            self._export_cleaning_video(video_buffer, video_path, max_dose=np.max(matrix) if np.max(matrix) > 0 else 1.0)
+
+    def _export_cleaning_video(self, video_buffer, output_path, max_dose, fps=30.0):
+        import cv2
+        if not video_buffer: return
+        view_size = 400
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (view_size, view_size))
+        mask = np.zeros((view_size, view_size), dtype=np.uint8)
+        cv2.circle(mask, (view_size//2, view_size//2), view_size//2, 255, -1)
+        for frame_data in video_buffer:
+            dose_raw = frame_data['dose'].T
+            dose_norm = (np.clip(dose_raw / max_dose, 0, 1) * 255).astype(np.uint8)
+            dose_view = cv2.applyColorMap(dose_norm, cv2.COLORMAP_VIRIDIS)
+            dose_view = cv2.resize(dose_view, (view_size, view_size), interpolation=cv2.INTER_NEAREST)
+            dose_view = cv2.bitwise_and(dose_view, dose_view, mask=mask)
+            out.write(dose_view)
+        out.release()
 
     def _export_radial_distribution(self, matrix, filepath):
         grid_size = matrix.shape[0]
