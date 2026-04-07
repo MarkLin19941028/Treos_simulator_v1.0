@@ -21,7 +21,7 @@ class AutoTunerGUI:
     def __init__(self, root, main_app=None):
         self.root = root
         self.main_app = main_app
-        self.root.title("Physics Auto Tuner (Recipe-Aware)")
+        self.root.title("Advanced Simulator")
         self.root.geometry("1400x800")
         
         self.base_config = get_default_config()
@@ -65,7 +65,7 @@ class AutoTunerGUI:
         
         # 3. Charging Tab
         self.frame_charging = ttk.Frame(self.notebook)
-        self.notebook.add(self.frame_charging, text="Charging (Potential)")
+        self.notebook.add(self.frame_charging, text="Charging")
         self._build_tab(self.frame_charging, "Charging")
 
     def _build_tab(self, parent_frame, tab_name):
@@ -76,7 +76,7 @@ class AutoTunerGUI:
         paned.add(left_frame, weight=1)
 
         # 1. Experimental Data Loading
-        frame_load = ttk.LabelFrame(left_frame, text=f"1. Load Experimental Data (Target for {tab_name})", padding=10)
+        frame_load = ttk.LabelFrame(left_frame, text=f"1. Load Experimental Data", padding=10)
         frame_load.pack(fill="x", padx=10, pady=5)
         
         lbl_csv = ttk.Label(frame_load, text="Exp CSV: Not Loaded", foreground="gray")
@@ -88,7 +88,7 @@ class AutoTunerGUI:
         lbl_recipe_status.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="w")
 
         # 2. Parameter Tuning Settings
-        frame_params = ttk.LabelFrame(left_frame, text=f"2. Select Tuning Parameters ({tab_name})", padding=10)
+        frame_params = ttk.LabelFrame(left_frame, text=f"2. Select Tuning Parameters", padding=10)
         frame_params.pack(fill="both", expand=True, padx=10, pady=5)
         
         params_container = ttk.Frame(frame_params)
@@ -177,7 +177,7 @@ class AutoTunerGUI:
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
                 
-                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 9), foreground="gray", wraplength=450)
                 lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
                 row += 2
 
@@ -204,7 +204,7 @@ class AutoTunerGUI:
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
                 
-                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 9), foreground="gray", wraplength=450)
                 lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
                 row += 2
 
@@ -393,7 +393,7 @@ class AutoTunerGUI:
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
                 
-                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 9), foreground="gray", wraplength=450)
                 lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
                 row += 2
 
@@ -418,7 +418,7 @@ class AutoTunerGUI:
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
                 
-                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 7), foreground="gray", wraplength=450)
+                lbl_desc = ttk.Label(scroll_frame, text=description, font=("Arial", 9), foreground="gray", wraplength=450)
                 lbl_desc.grid(row=row+1, column=1, columnspan=5, sticky="w", pady=(0, 2))
                 row += 2
 
@@ -793,7 +793,12 @@ class AutoTunerGUI:
             msg += f"{k}: {v:.6e}\n"
             
         title = "Tuning Stopped" if was_stopped else "Tuning Success"
-        messagebox.showinfo(title, msg)
+        # Print results to terminal instead of showing message box
+        print("\n" + "="*40)
+        print(f"[{title}] - {tab_name}")
+        print("-"*40)
+        print(msg.strip())
+        print("="*40 + "\n")
 
 if __name__ == "__main__":
     root = tk.Tk()

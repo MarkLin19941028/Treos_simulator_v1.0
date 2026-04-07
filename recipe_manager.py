@@ -70,7 +70,7 @@ class RecipeManager:
                             writer.writerow([f"step_{j+1}_speed", step_entry['speed'].get()])
                     writer.writerow([])
             
-            messagebox.showinfo("Success", "Recipe exported successfully!")
+            # messagebox.showinfo("Success", "Recipe exported successfully!")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export recipe: {e}")
 
@@ -260,7 +260,7 @@ class RecipeManager:
             if hasattr(self.app, 'current_recipe_file_var'):
                 self.app.current_recipe_file_var.set(f"Current Recipe: {filename}")
 
-            messagebox.showinfo("Success", "Recipe imported successfully!")
+            # messagebox.showinfo("Success", "Recipe imported successfully!")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to import recipe: {e}")

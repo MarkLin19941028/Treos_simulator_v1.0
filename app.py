@@ -358,13 +358,13 @@ class SimulationApp:
         report_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
         # 第一列：基礎報告與工具
-        ttk.Button(report_frame, text="Simulation Report", width=20, command=self.export_simulation_report).grid(row=0, column=0, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="Generate Video", width=20, command=self.export_simulation_video).grid(row=0, column=1, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="Moving Pattern", width=20, command=self.moving_pattern_generator.export_nozzle_pattern).grid(row=0, column=2, padx=5, pady=2, sticky="w")
-        ttk.Button(report_frame, text="Accumulation Heatmap", width=20, command=self.export_accumulation_heatmap).grid(row=0, column=3, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Simulation Report", width=16, command=self.export_simulation_report).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Generate Video", width=16, command=self.export_simulation_video).grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Moving Pattern", width=16, command=self.moving_pattern_generator.export_nozzle_pattern).grid(row=0, column=2, padx=5, pady=2, sticky="w")
         
         # 第二列：進階分析與調校工具
-        ttk.Button(report_frame, text="AutoTune", width=20, command=self.open_autotuner).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Accumulation Heatmap", width=16, command=self.export_accumulation_heatmap).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Advanced Function", width=16, command=self.open_autotuner).grid(row=1, column=1, padx=5, pady=2, sticky="w")
 
         global_frame = ttk.LabelFrame(content_frame, text="Global Parameters", padding="10")
         global_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
