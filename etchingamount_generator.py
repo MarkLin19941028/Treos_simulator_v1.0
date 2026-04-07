@@ -26,13 +26,27 @@ def _numba_deposit_liquid(film_matrix, conc_matrix, center_x, center_y,
     max_i = min(grid_size - 1, int(math.ceil(idx_x + r_pixel)))
     min_j = max(0, int(math.floor(idx_y - r_pixel)))
     max_j = min(grid_size - 1, int(math.ceil(idx_y + r_pixel)))
+    
     radius_sq = radius * radius
+    sigma = radius / 2.0
+    total_weight = 0.0
+    
+    # Step 1: 計算總權重 (高斯歸一化)
+    for i in range(min_i, max_i + 1):
+        for j in range(min_j, max_j + 1):
+            dist_sq = (i - idx_x)**2 + (j - idx_y)**2
+            if dist_sq <= radius_sq:
+                total_weight += math.exp(-dist_sq / (2 * sigma * sigma))
+    
+    if total_weight <= 0.0: return
+    
+    # Step 2: 根據高斯權重分配液體量
     particle_vol = impingement_bonus * dt 
     for i in range(min_i, max_i + 1):
         for j in range(min_j, max_j + 1):
             dist_sq = (i - idx_x)**2 + (j - idx_y)**2
             if dist_sq <= radius_sq:
-                weight = 1.0 
+                weight = math.exp(-dist_sq / (2 * sigma * sigma)) / total_weight
                 added_vol = particle_vol * weight
                 old_h = film_matrix[i, j]
                 old_c = conc_matrix[i, j]
@@ -183,15 +197,15 @@ class EtchingAmountGenerator:
                 if np.max(film_matrix) < 0.001 and snapshot.get('is_finished'): break
                 elif sim_clock > (total_duration + 3.0): break
         self._export_results(etch_matrix, filepath, config=config)
-        video_path = filepath.replace(".png", "_DualView.mp4")
-        self._export_dual_view_video(video_buffer, video_path, max_etch=np.max(etch_matrix) if np.max(etch_matrix) > 0 else 1.0, sat_h=sat_h, fps=VIDEO_FPS)
+        video_path = filepath.replace(".png", "_EtchingView.mp4")
+        self._export_etching_video(video_buffer, video_path, max_etch=np.max(etch_matrix) if np.max(etch_matrix) > 0 else 1.0, fps=VIDEO_FPS)
         return True
 
-    def _export_dual_view_video(self, video_buffer, output_path, max_etch, sat_h, fps=30.0):
+    def _export_etching_video(self, video_buffer, output_path, max_etch, fps=30.0):
         import cv2
         if not video_buffer: return
-        view_size = 800 
-        frame_size = (view_size * 2, view_size)
+        view_size = 400 
+        frame_size = (view_size, view_size)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
         mask = np.zeros((view_size, view_size), dtype=np.uint8)
@@ -202,14 +216,7 @@ class EtchingAmountGenerator:
             etch_view = cv2.applyColorMap(etch_norm, cv2.COLORMAP_VIRIDIS)
             etch_view = cv2.resize(etch_view, (view_size, view_size), interpolation=cv2.INTER_NEAREST)
             etch_view = cv2.bitwise_and(etch_view, etch_view, mask=mask)
-            film_raw = frame_data['film'].T
-            current_max_film = np.max(film_raw)
-            norm_base = max(current_max_film, 0.01) 
-            film_norm = (np.clip(film_raw / norm_base, 0, 1) * 255).astype(np.uint8)
-            film_view = cv2.applyColorMap(film_norm, cv2.COLORMAP_OCEAN)
-            film_view = cv2.resize(film_view, (view_size, view_size), interpolation=cv2.INTER_NEAREST)
-            film_view = cv2.bitwise_and(film_view, film_view, mask=mask)
-            out.write(np.hstack((etch_view, film_view)))
+            out.write(etch_view)
         out.release()
 
     def _export_results(self, matrix, filepath, config=None):
@@ -224,21 +231,47 @@ class EtchingAmountGenerator:
         plt.gca().add_artist(plt.Circle((0, 0), 150, color='red', fill=False, linestyle='--', alpha=0.5))
         plt.title("Wafer Etching Amount (Film Model)", fontsize=14, pad=15)
         plt.xlabel("X Position (mm)"); plt.ylabel("Y Position (mm)")
+        
+        # 統計數值計算 (只算 > 0)
         if data.size > 0 and np.any(data > 0):
-            valid_data = data[data > 0]
-            h_max = np.max(data); h_min = np.min(valid_data); h_mean = np.mean(valid_data)
-            h_uni = (h_max - h_min) / (2 * h_mean) * 100 if h_mean > 0 else 0.0
-        else: h_max = h_min = h_mean = h_uni = 0.0
+            valid_data = data[data > 1e-6]
+            h_max = np.max(data)
+            h_min = np.min(valid_data) if valid_data.size > 0 else 0.0
+            h_avg = np.mean(valid_data) if valid_data.size > 0 else 0.0
+            h_med = np.median(valid_data) if valid_data.size > 0 else 0.0
+        else: h_max = h_min = h_avg = h_med = 0.0
+        
         if config is None:
             from simulation_config_def import get_default_config
             config = get_default_config()
-        params_lines = []
+            
+        # 僅顯示 Etching 相關 Tuning Parameters
+        tuning_keys = [
+            'ETCHING_GLOBAL_SCALE', 'GRID_SIZE', 'ETCHING_TAU', 
+            'ETCHING_SATURATION_THICKNESS', 'ETCHING_BASE_SPIN_DECAY', 
+            'ETCHING_IMPINGEMENT_BONUS', 'ETCHING_GEO_SMOOTHING', 
+            'ETCHING_SATURATION_THRESHOLD', 'ETCHING_SHEAR_COEFF'
+        ]
         from simulation_config_def import PARAMETER_DEFINITIONS
-        for category, params in PARAMETER_DEFINITIONS.items():
-            for key, info in params.items():
-                params_lines.append(f"{info[0]}: {config.get(key, info[1])}")
-        stats_text = f"Max: {h_max:.4f}\nMin(>0): {h_min:.4f}\nUniformity: {h_uni:.2f}%\n------------------\n" + "\n".join(params_lines)
-        plt.text(-145, -145, stats_text, color='white', fontsize=8, family='monospace', fontweight='bold', bbox=dict(facecolor='black', alpha=0.6, edgecolor='none'))
+        params_lines = []
+        for key in tuning_keys:
+            if key in config:
+                # 從定義中找 Label
+                label = key
+                for cat in PARAMETER_DEFINITIONS.values():
+                    if key in cat:
+                        label = cat[key][0]
+                        break
+                params_lines.append(f"{label}: {config[key]}")
+        
+        stats_text = (
+            f"Max: {h_max:.4f}\nMin(>0): {h_min:.4f}\n"
+            f"Average(>0): {h_avg:.4f}\nMedian(>0): {h_med:.4f}\n"
+            "------------------\n" + "\n".join(params_lines)
+        )
+        plt.text(-145, -145, stats_text, color='white', fontsize=8, family='monospace', 
+                 fontweight='bold', bbox=dict(facecolor='black', alpha=0.6, edgecolor='none'))
+        
         plt.tight_layout(); plt.savefig(filepath, bbox_inches='tight', dpi=300); plt.close()
         try: np.savetxt(csv_path, data, delimiter=",", fmt='%.6f', header="Etching Amount Data")
         except: pass
@@ -362,6 +395,17 @@ class EtchingAmountGenerator:
 
     def _export_radial_distribution(self, matrix, filepath):
         radial_avg = self.calculate_radial_average(matrix)
+        
+        # 保存徑向分佈的 RawData
+        csv_raw_path = filepath.replace(".png", "_Radial_RawData.csv")
+        try:
+            with open(csv_raw_path, 'w') as f:
+                f.write("Radius(mm),Average Etching Amount(A.U.)\n")
+                for r_val, avg_val in enumerate(radial_avg):
+                    f.write(f"{r_val},{avg_val:.6f}\n")
+        except Exception as e:
+            print(f"Error saving radial raw data: {e}")
+
         max_r = int(WAFER_RADIUS)
         plt.figure(figsize=(10, 6), dpi=100)
         plt.plot(np.arange(len(radial_avg)), radial_avg, color='blue', linewidth=2, label='Average EA')
@@ -371,10 +415,21 @@ class EtchingAmountGenerator:
         plt.xlim(0, max_r); plt.xticks(np.arange(0, max_r + 1, 10))
         plt.ylim(0, np.max(radial_avg) * 1.1 if np.max(radial_avg) > 0 else 1.0)
         plt.grid(True, linestyle='--', alpha=0.7)
+        
+        # 統計看板 (與要求對齊：Max, Min, Average, Median)
         if radial_avg.size > 0 and np.any(radial_avg > 0):
-            valid_r = radial_avg[radial_avg > 0]
-            r_max = np.max(radial_avg); r_min = np.min(valid_r); r_mean = np.mean(valid_r)
-            r_uni = (r_max - r_min) / (2 * r_mean) * 100 if r_mean > 0 else 0.0
-            stats_text = f"Max: {r_max:.4f}\nMin(>0): {r_min:.4f}\nUniformity: {r_uni:.2f}%"
-            plt.text(0.02, 0.05, stats_text, transform=plt.gca().transAxes, color='blue', fontsize=10, family='monospace', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7, edgecolor='blue'))
+            valid_r = radial_avg[radial_avg > 1e-6]
+            r_max = np.max(radial_avg)
+            r_min = np.min(valid_r) if valid_r.size > 0 else 0.0
+            r_avg = np.mean(valid_r) if valid_r.size > 0 else 0.0
+            r_med = np.median(valid_r) if valid_r.size > 0 else 0.0
+            
+            stats_text = (
+                f"Max: {r_max:.4f}\nMin(>0): {r_min:.4f}\n"
+                f"Average: {r_avg:.4f}\nMedian: {r_med:.4f}"
+            )
+            plt.text(0.02, 0.05, stats_text, transform=plt.gca().transAxes, color='blue', 
+                     fontsize=10, family='monospace', fontweight='bold', 
+                     bbox=dict(facecolor='white', alpha=0.7, edgecolor='blue'))
+                     
         plt.tight_layout(); plt.savefig(filepath, bbox_inches='tight', dpi=300); plt.close()

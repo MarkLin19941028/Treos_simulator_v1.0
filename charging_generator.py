@@ -30,13 +30,29 @@ def _numba_deposit_and_separate_charge(surface_charge, liquid_charge, film_matri
     min_j, max_j = int(max(0, idx_y - r_pixel)), int(min(grid_size - 1, idx_y + r_pixel))
     
     speed = math.sqrt(vel_x**2 + vel_y**2)
-    q_gen = dynamic_eff * speed * dt
+    q_total = dynamic_eff * speed * dt
 
     radius_sq = spray_r**2
+    sigma = spray_r / 2.0
+    total_weight = 0.0
+    
+    # Step 1: 計算範圍內高斯總權重 (歸一化基準)
     for i in range(min_i, max_i + 1):
         for j in range(min_j, max_j + 1):
-            if (float(i) - idx_x)**2 + (float(j) - idx_y)**2 <= radius_sq:
+            dist_sq = (float(i) - idx_x)**2 + (float(j) - idx_y)**2
+            if dist_sq <= radius_sq:
+                total_weight += math.exp(-dist_sq / (2 * sigma * sigma))
+    
+    if total_weight <= 0.0: return
+
+    # Step 2: 歸一化分配電荷
+    for i in range(min_i, max_i + 1):
+        for j in range(min_j, max_j + 1):
+            dist_sq = (float(i) - idx_x)**2 + (float(j) - idx_y)**2
+            if dist_sq <= radius_sq:
                 if film_matrix[i, j] > 1e-5:
+                    weight = math.exp(-dist_sq / (2 * sigma * sigma)) / total_weight
+                    q_gen = q_total * weight
                     # [關鍵邏輯]：表面獲得電荷 (Fixed)，液體獲得反向電荷 (Mobile)
                     surface_charge[i, j] += q_gen  
                     liquid_charge[i, j] -= q_gen
@@ -432,9 +448,15 @@ class ChargingGenerator:
         real_base = filepath.replace("_Charging.png", "")
         radial_png_path = f"{real_base}_Charging_Radial_Distribution.png"
         video_path = f"{real_base}_Charging_Simulation.mp4"
+        csv_path = f"{real_base}_Charging_RawData.csv"
 
         # 計算電位矩陣 (基於表面電荷與等效電容)
         potential_map = self._calculate_potential(charge_Q, config)
+
+        # 0. 輸出 RawData CSV
+        try:
+            np.savetxt(csv_path, potential_map.T, delimiter=",", fmt='%.6f', header="Charging Potential Data (V)")
+        except: pass
 
         # 1. 輸出 Heatmap PNG
         self._export_potential_map(potential_map, filepath, config)
@@ -452,15 +474,25 @@ class ChargingGenerator:
         return surface_Q / kpfm_cap
 
     def _export_potential_map(self, potential_map, filepath, current_config):
-        v_max = np.max(potential_map)
-        v_min = np.min(potential_map)
+        data = potential_map.T
+        v_max = np.max(data)
+        v_min = np.min(data)
         abs_max = max(abs(v_max), abs(v_min))
         if abs_max == 0: abs_max = 1.0
         
+        # 統計數值 (只算絕對值 > 1e-4 的區域，避免背景干擾)
+        valid_mask = np.abs(data) > 1e-4
+        if np.any(valid_mask):
+            v_avg = np.mean(data[valid_mask])
+            v_med = np.median(data[valid_mask])
+            v_min_valid = np.min(data[valid_mask])
+        else:
+            v_avg = v_med = v_min_valid = 0.0
+
         plt.figure(figsize=(10, 8))
-        im = plt.imshow(potential_map.T, 
+        im = plt.imshow(data, 
                         origin='lower', 
-                        cmap='seismic_r', 
+                        cmap='jet', 
                         extent=[-150, 150, -150, 150],
                         vmin=-abs_max, vmax=abs_max)
         
@@ -470,21 +502,28 @@ class ChargingGenerator:
         plt.xlabel('X (mm)')
         plt.ylabel('Y (mm)')
 
-        # 參數資訊
-        params_lines = []
+        # 僅顯示 Charging 相關 Tuning Parameters
+        tuning_keys = [
+            'FLUID_CONDUCTIVITY', 'FLUID_RELATIVE_PERMITTIVITY', 
+            'CHARGING_EFFICIENCY', 'CHARGING_RPM_FACTOR', 
+            'SURFACE_DIFFUSION_COEFF', 'CHARGING_SPRAY_RADIUS', 
+            'KPFM_CAPACITANCE'
+        ]
         from simulation_config_def import PARAMETER_DEFINITIONS
-        for category, params in PARAMETER_DEFINITIONS.items():
-            for key, info in params.items():
-                label = info[0]
-                val = current_config.get(key, info[1])
-                params_lines.append(f"{label}: {val}")
-        params_text = "\n".join(params_lines)
+        params_lines = []
+        for key in tuning_keys:
+            if key in current_config:
+                label = key
+                for cat in PARAMETER_DEFINITIONS.values():
+                    if key in cat:
+                        label = cat[key][0]
+                        break
+                params_lines.append(f"{label}: {current_config[key]}")
+
         stats_text = (
-            f"Max: {v_max:.4f}V\n"
-            f"Min: {v_min:.4f}V\n"
-            f"Range: {abs(v_max-v_min):.4f}V\n"
-            f"------------------\n"
-            f"{params_text}"
+            f"Max: {v_max:.4f}V\nMin(valid): {v_min_valid:.4f}V\n"
+            f"Average(valid): {v_avg:.4f}V\nMedian(valid): {v_med:.4f}V\n"
+            "------------------\n" + "\n".join(params_lines)
         )
         plt.text(-145, -145, stats_text, color='white', fontsize=7,
                 family='monospace', fontweight='bold',
@@ -507,6 +546,16 @@ class ChargingGenerator:
         np.add.at(radial_count, r_rounded[mask], 1)
         radial_avg = np.divide(radial_sum, radial_count, out=np.zeros_like(radial_sum), where=radial_count > 0)
         
+        # 保存徑向分佈的 RawData
+        csv_raw_path = filepath.replace(".png", "_Radial_RawData.csv")
+        try:
+            with open(csv_raw_path, 'w') as f:
+                f.write("Radius(mm),Average Surface Potential(V)\n")
+                for r_val, avg_val in enumerate(radial_avg):
+                    f.write(f"{r_val},{avg_val:.6f}\n")
+        except Exception as e:
+            print(f"Error saving radial raw data: {e}")
+
         plt.figure(figsize=(10, 6), dpi=100)
         plt.plot(np.arange(len(radial_avg)), radial_avg, color='red', linewidth=2, label='Avg Potential')
         plt.fill_between(np.arange(len(radial_avg)), radial_avg, alpha=0.2, color='red')
@@ -516,12 +565,19 @@ class ChargingGenerator:
         plt.xlim(0, max_r)
         plt.grid(True, linestyle='--', alpha=0.7)
 
-        v_max = np.max(radial_avg)
-        v_min = np.min(radial_avg)
-        stats_text = f"Max: {v_max:.4f}V\nMin: {v_min:.4f}V"
-        plt.text(0.02, 0.95, stats_text, transform=plt.gca().transAxes,
+        # 統計看板 (Max, Min, Average, Median)
+        valid_r = radial_avg[np.abs(radial_avg) > 1e-4]
+        r_max = np.max(radial_avg)
+        r_min = np.min(valid_r) if valid_r.size > 0 else 0.0
+        r_avg = np.mean(valid_r) if valid_r.size > 0 else 0.0
+        r_med = np.median(valid_r) if valid_r.size > 0 else 0.0
+        
+        stats_text = (
+            f"Max: {r_max:.4f}V\nMin(valid): {r_min:.4f}V\n"
+            f"Average: {r_avg:.4f}V\nMedian: {r_med:.4f}V"
+        )
+        plt.text(0.02, 0.05, stats_text, transform=plt.gca().transAxes,
                 color='red', fontsize=10, family='monospace', fontweight='bold',
-                verticalalignment='top',
                 bbox=dict(facecolor='white', alpha=0.7, edgecolor='red'))
 
         plt.tight_layout()
@@ -546,22 +602,24 @@ class ChargingGenerator:
         abs_max_global = max(abs(v_max_final), abs(v_min_final), 1e-5)
 
         print(f"Exporting Charging Video...")
+        
+        # 使用與圖片相同的 'jet' colormap
+        cmap_id = cv2.COLORMAP_JET
+
         for frame_data in video_buffer:
             p_map = self._calculate_potential(frame_data['surface_charge'], config)
             
             # 歸一化到 0-255，且 0V 剛好在中間 (127)
             # (val - (-abs_max)) / (2 * abs_max) * 255
             norm_map = ((p_map.T + abs_max_global) / (2 * abs_max_global) * 255)
-            norm_map = np.clip(norm_map, 0, 255).astype(np.uint8)
+            # 增加亮度：將歸一化後的數值進行稍微的 Gamma 修正或線性縮放
+            # 這裡我們稍微提高基礎亮度
+            norm_map = np.clip(norm_map * 1.1, 0, 255).astype(np.uint8)
             
-            # 使用 seismic_r 對應的 OpenCV 色階 (此處手動模擬或使用 COLORMAP_JET)
-            color_view = cv2.applyColorMap(norm_map, cv2.COLORMAP_JET)
+            # 使用選定的 colormap
+            color_view = cv2.applyColorMap(norm_map, cmap_id)
             color_view = cv2.resize(color_view, (view_size, view_size), interpolation=cv2.INTER_LINEAR)
             color_view = cv2.bitwise_and(color_view, color_view, mask=mask)
-            
-            # 加上時間文字
-            cv2.putText(color_view, f"Time: {frame_data['time']:.1f}s", (20, 40), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
             out.write(color_view)
 

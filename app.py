@@ -668,7 +668,7 @@ class SimulationApp:
                 play_speed_multiplier=current_multiplier,
                 config=current_config
             )
-            messagebox.showinfo("Success", f"Video exported successfully to:\n{filepath}")
+            print("Success", f"Video exported successfully to:\n{filepath}")
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during video generation: {e}")
         finally:
@@ -736,7 +736,7 @@ class SimulationApp:
                         writer = csv.DictWriter(csvfile, fieldnames=report_data[0].keys())
                         writer.writeheader()
                         writer.writerows(report_data)
-                    # messagebox.showinfo("Success", f"Simulation report exported successfully to:\n{filepath}")
+                    print("Success", f"Simulation report exported successfully to:\n{filepath}")
                 except Exception as e:
                     messagebox.showerror("Export Error", f"Failed to write simulation report to file: {e}")
                     
@@ -761,7 +761,7 @@ class SimulationApp:
                             writer = csv.DictWriter(csvfile, fieldnames=headers)
                             writer.writeheader()
                             writer.writerows(processed_particle_data)
-                    messagebox.showinfo("Success", f"Report exported successfully to:\n{particle_filepath}")
+                    print("Success", f"Report exported successfully to:\n{particle_filepath}")
                 except Exception as e:
                     messagebox.showerror("Export Error", f"Failed to write particle report to file: {e}")
 
@@ -840,7 +840,7 @@ class SimulationApp:
                 progress_window.destroy()
 
             if success:
-                messagebox.showinfo("Success", f"Etching Amount exported successfully.")
+                print("Success", f"Etching Amount exported successfully.")
 
         except Exception as e:
             messagebox.showerror("Etching Error", f"Failed during etching amount generation: {e}")
@@ -907,7 +907,7 @@ class SimulationApp:
                 progress_window.destroy()
 
             if success:
-                messagebox.showinfo("Success", f"Cleaning Dose exported successfully.")
+                print("Success", f"Cleaning Dose exported successfully.")
 
         except Exception as e:
             messagebox.showerror("Dose Error", f"Failed during cleaning dose generation: {e}")
@@ -1006,7 +1006,7 @@ class SimulationApp:
 
             if success:
                 # 提示成功，列出產生的檔案類型
-                messagebox.showinfo("Success", 
+                print("Success", 
                     f"Accumulation Heatmap exported successfully:\n\n"
                     f"1. Heatmap PNG (Quantitative)\n"
                     f"2. Radial Distribution Plot\n"
@@ -1097,7 +1097,7 @@ class SimulationApp:
                 progress_window.destroy()
 
             if success:
-                messagebox.showinfo("Success", f"Charging Simulation exported successfully.")
+                print("Success", f"Charging Simulation exported successfully.")
 
         except Exception as e:
             messagebox.showerror("Charging Error", f"Failed during charging simulation generation: {e}")

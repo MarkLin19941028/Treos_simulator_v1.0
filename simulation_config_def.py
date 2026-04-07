@@ -29,7 +29,9 @@ PARAMETER_DEFINITIONS = {
         "PRE_Q_REF":                  ("Q Ref (mL/min)", 1000.0, 'float', (100.0, 5000.0), "參考流量 (mL/min)", False),
         "PRE_GAMMA_BASE":             ("Gamma Base", 0.001, 'float', (0.0, 1.0), "基礎再附著係數 (1/mm)", True),
         "PRE_DEFECT_COUNT":           ("Initial Defect Count", 10000, 'int', (10, 100000), "模擬進站初始缺陷數量", False),
-        "PRE_DEFECT_CALI":            ("Defect Map Cali", 0.5, 'float', (0.01, 10.0), "缺陷殘留機率校正係數", True),
+        "PRE_DEFECT_CALI":            ("Defect Map Cali", 10.0, 'float', (0.01, 10000.0), "缺陷殘留機率校正係數", True),
+        "PRE_TRANS_SENSITIVITY":      ("Transport Sensitivity", 100.0, 'float', (0.0, 1000.0), "徑向位移敏感度 (離心力帶動能力)", True),
+        "PRE_REDEP_COEFF":            ("Re-deposition Coeff", 0.01, 'float', (0.0, 1.0), "二次附著基礎機率", True),
     },
     "Charging Simulation": {
         # 1. 流體基礎電性
