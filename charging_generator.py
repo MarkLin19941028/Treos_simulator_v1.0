@@ -163,7 +163,7 @@ class ChargingGenerator:
         liquid_charge = np.zeros((grid_size, grid_size), dtype=np.float64)
         film_matrix = np.zeros((grid_size, grid_size), dtype=np.float64)
 
-        # [優化] 平衡 FPS 與精細度：確保顆粒感消除
+        # [優化] 平衡 FPS 與精細度：確保顆粒感消除，並與正式輸出保持物理一致
         max_rpm = 0
         for proc in recipe['processes']:
             spin = proc.get('spin_params', {})
@@ -201,9 +201,7 @@ class ChargingGenerator:
                     self._simple_deposit_film(film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)
                     
                     vel = engine.particles_vel[idx]
-                    # [優化] 補償減少的粒子數，確保總沉積液膜量不變 (charge_generator 的 _simple_deposit_film 已經包含 flow_scale，但我們也要對 _simple_deposit_film 做縮放)
-                    # Ah, wait, _simple_deposit_film is called before this.
-                    # Let's scale flow_scale
+                    # [優化] 補償減少的粒子數，確保總沉積液膜量不變
                     flow_scale *= (1.0 / fast_particle_scale)
                     
                     self._simple_deposit_film(film_matrix, pos[0], pos[1], 2.0, 0.005 * flow_scale)

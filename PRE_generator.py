@@ -129,7 +129,7 @@ class PREGenerator:
     def generate(self, recipe, filepath, config=None, progress_widgets=None, play_speed_multiplier=1.0):
         """ 標準模擬入口：包含進度條與檔案輸出 """
         dose_matrix, final_defects, video_buffer = self._run_core_simulation(
-            recipe, config, progress_widgets=progress_widgets, fast_mode=False, 
+            recipe, config, progress_widgets=progress_widgets, fast_mode=True, 
             play_speed_multiplier=play_speed_multiplier
         )
         if dose_matrix is None: return False
@@ -162,17 +162,14 @@ class PREGenerator:
         trans_sens = config.get('PRE_TRANS_SENSITIVITY', 1.0)
         redep_base = config.get('PRE_REDEP_COEFF', 0.05)
 
-        # 2. 動態 FPS 計算 (用於加速)
-        if fast_mode:
-            max_rpm = 0
-            for proc in recipe['processes']:
-                spin = proc.get('spin_params', {})
-                c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
-                if float(c_max) > max_rpm: max_rpm = float(c_max)
-            report_fps = max(30, min(1000, int(max_rpm * 0.5)))
-        else:
-            report_fps = recipe.get('dynamic_report_fps', REPORT_FPS)
-            
+        # 2. 動態 FPS 計算 (無論是否為 fast_mode 都使用動態 FPS 以保持物理一致性)
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc.get('spin_params', {})
+            c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
+            if float(c_max) > max_rpm: max_rpm = float(c_max)
+        
+        report_fps = max(200, min(2000, int(max_rpm * 1.0)))
         recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
 

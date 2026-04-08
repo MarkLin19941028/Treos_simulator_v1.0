@@ -69,6 +69,29 @@ class RecipeManager:
                             writer.writerow([f"step_{j+1}_pos", step_entry['pos'].get()])
                             writer.writerow([f"step_{j+1}_speed", step_entry['speed'].get()])
                     writer.writerow([])
+
+                # --- 匯出 Advanced Function (AutoTuner) 的 Initial Guess 參數 ---
+                writer.writerow(["[TUNING_PARAMETERS]"])
+                tuning_params = {}
+                # 優先從開啟的視窗中獲取最新值
+                if self.app.autotuner_instance and self.app.autotuner_instance.root.winfo_exists():
+                    tuning_params = self.app.autotuner_instance.get_all_tuning_guesses()
+                    # 同時更新 app 的暫存
+                    self.app.imported_tuning_params.update(tuning_params)
+                else:
+                    # 視窗未開啟，使用 app 暫存的參數 (可能是之前匯入的)
+                    tuning_params = self.app.imported_tuning_params
+                
+                # 如果 tuning_params 為空，則從預設配置中獲取 (確保匯出時總是有數值)
+                if not tuning_params:
+                    from simulation_config_def import PARAMETER_DEFINITIONS
+                    for category, params in PARAMETER_DEFINITIONS.items():
+                        if category in ["Etching Amount", "Particle Removal", "Charging Simulation"]:
+                            for key, info in params.items():
+                                tuning_params[key] = info[1] # info[1] 是預設值
+
+                for key, val in tuning_params.items():
+                    writer.writerow([key, val])
             
             # messagebox.showinfo("Success", "Recipe exported successfully!")
         except Exception as e:
@@ -101,6 +124,7 @@ class RecipeManager:
 
             global_params, imported_processes, current_process_dict = {}, [], None
             
+            imported_tuning_params = {}
             if filepath.endswith(".csv"):
                 import csv
                 content, enc = self._read_file_with_fallback(filepath)
@@ -108,6 +132,7 @@ class RecipeManager:
                 import io
                 f = io.StringIO(content)
                 reader = csv.reader(f)
+                current_section = None
                 for raw_row in reader:
                     if not raw_row: continue
                     # 過濾掉空白欄位 (Excel 可能會塞入很多空白)
@@ -115,8 +140,8 @@ class RecipeManager:
                     if not row: continue
                     
                     if row[0].startswith('[') and row[0].endswith(']'):
-                        section = row[0][1:-1]
-                        if section.startswith('PROCESS_'):
+                        current_section = row[0][1:-1]
+                        if current_section.startswith('PROCESS_'):
                             current_process_dict = {'steps_data': {}}
                             imported_processes.append(current_process_dict)
                         else:
@@ -125,7 +150,9 @@ class RecipeManager:
                     
                     if len(row) >= 2:
                             key, value = row[0].strip(), row[1].strip()
-                            if current_process_dict is None:
+                            if current_section == "TUNING_PARAMETERS":
+                                imported_tuning_params[key] = value
+                            elif current_process_dict is None:
                                 global_params[key] = value
                                 if key.startswith('flow_rate_arm_'):
                                     arm_id = int(key.split('_')[-1])
@@ -147,8 +174,8 @@ class RecipeManager:
                     line = line.strip()
                     if not line or line.startswith('#'): continue
                     if line.startswith('[') and line.endswith(']'):
-                        section = line[1:-1]
-                        if section.startswith('PROCESS_'):
+                        current_section = line[1:-1]
+                        if current_section.startswith('PROCESS_'):
                             current_process_dict = {'steps_data': {}}
                             imported_processes.append(current_process_dict)
                         else:
@@ -158,7 +185,9 @@ class RecipeManager:
                     if '=' not in line: continue
                     key, value = [x.strip() for x in line.split('=', 1)]
                     
-                    if current_process_dict is None:
+                    if current_section == "TUNING_PARAMETERS":
+                        imported_tuning_params[key] = value
+                    elif current_process_dict is None:
                         global_params[key] = value
                         if key.startswith('flow_rate_arm_'):
                             arm_id = int(key.split('_')[-1])
@@ -253,6 +282,13 @@ class RecipeManager:
                 self.app._on_arm_change(i)
                 
             self.app._on_water_setting_mode_change() # 更新 Water Settings UI 顯示
+
+            # --- 更新 Advanced Function (AutoTuner) 參數 ---
+            if imported_tuning_params:
+                self.app.imported_tuning_params.update(imported_tuning_params)
+                # 若 AutoTuner 視窗已開啟，則立即更新 UI
+                if self.app.autotuner_instance and self.app.autotuner_instance.root.winfo_exists():
+                    self.app.autotuner_instance.set_tuning_guesses(imported_tuning_params)
 
             # 更新 UI 顯示的檔案名稱
             import os

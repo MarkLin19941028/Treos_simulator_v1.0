@@ -172,7 +172,13 @@ class AutoTunerGUI:
                 min_val, max_val = limit_range
                 ent_min = ttk.Entry(scroll_frame, width=8); ent_min.insert(0, str(min_val))
                 ent_max = ttk.Entry(scroll_frame, width=8); ent_max.insert(0, str(max_val))
-                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                # Use imported value if exists
+                initial_val = default_val
+                if self.main_app and key in self.main_app.imported_tuning_params:
+                    initial_val = self.main_app.imported_tuning_params[key]
+                
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(initial_val))
                 
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
@@ -199,7 +205,13 @@ class AutoTunerGUI:
                 # Still show entries but maybe emphasize they are initial settings
                 ent_min = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_min.insert(0, "N/A")
                 ent_max = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_max.insert(0, "N/A")
-                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                # Use imported value if exists
+                initial_val = default_val
+                if self.main_app and key in self.main_app.imported_tuning_params:
+                    initial_val = self.main_app.imported_tuning_params[key]
+                
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(initial_val))
                 
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
@@ -388,7 +400,13 @@ class AutoTunerGUI:
                 min_val, max_val = limit_range
                 ent_min = ttk.Entry(scroll_frame, width=8); ent_min.insert(0, str(min_val))
                 ent_max = ttk.Entry(scroll_frame, width=8); ent_max.insert(0, str(max_val))
-                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                # Use imported value if exists
+                initial_val = default_val
+                if self.main_app and key in self.main_app.imported_tuning_params:
+                    initial_val = self.main_app.imported_tuning_params[key]
+                
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(initial_val))
                 
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
@@ -413,7 +431,13 @@ class AutoTunerGUI:
                 
                 ent_min = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_min.insert(0, "N/A")
                 ent_max = ttk.Entry(scroll_frame, width=8, state="disabled"); ent_max.insert(0, "N/A")
-                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(default_val))
+                
+                # Use imported value if exists
+                initial_val = default_val
+                if self.main_app and key in self.main_app.imported_tuning_params:
+                    initial_val = self.main_app.imported_tuning_params[key]
+                    
+                ent_guess = ttk.Entry(scroll_frame, width=8); ent_guess.insert(0, str(initial_val))
                 
                 ent_min.grid(row=row, column=3, padx=2, pady=(2, 0)); ent_max.grid(row=row, column=4, padx=2, pady=(2, 0)); ent_guess.grid(row=row, column=5, padx=2, pady=(2, 0))
                 self.tabs_state[tab_name]["param_vars"][key] = {'enabled': var_enabled, 'min': ent_min, 'max': ent_max, 'guess': ent_guess}
@@ -793,12 +817,34 @@ class AutoTunerGUI:
             msg += f"{k}: {v:.6e}\n"
             
         title = "Tuning Stopped" if was_stopped else "Tuning Success"
-        # Print results to terminal instead of showing message box
-        print("\n" + "="*40)
-        print(f"[{title}] - {tab_name}")
-        print("-"*40)
-        print(msg.strip())
-        print("="*40 + "\n")
+
+    def get_all_tuning_guesses(self):
+        """Returns a dictionary of all current 'Initial Guess' values across all tabs."""
+        all_guesses = {}
+        for tab_name, state in self.tabs_state.items():
+            for key, vars in state["param_vars"].items():
+                try:
+                    val = vars['guess'].get()
+                    all_guesses[key] = val
+                except Exception:
+                    continue
+        return all_guesses
+
+    def set_tuning_guesses(self, guesses_dict):
+        """Updates the UI entries with provided values."""
+        updated_count = 0
+        for tab_name, state in self.tabs_state.items():
+            for key, vars in state["param_vars"].items():
+                if key in guesses_dict:
+                    try:
+                        entry = vars['guess']
+                        entry.delete(0, tk.END)
+                        entry.insert(0, str(guesses_dict[key]))
+                        updated_count += 1
+                    except Exception:
+                        continue
+        if updated_count > 0:
+            print(f"\n[Import] Successfully loaded {updated_count} tuning parameters into AutoTuner UI.")
 
 if __name__ == "__main__":
     root = tk.Tk()

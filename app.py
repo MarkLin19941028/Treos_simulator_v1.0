@@ -134,6 +134,8 @@ class SimulationApp:
         self.play_speed_multiplier = 1.0
         self.simulation_time_elapsed = 0.0
         self.display_water_var = tk.BooleanVar(value=True)
+        self.imported_tuning_params = {} # 存放從 Recipe 匯入的調校參數 (Initial Guess)
+        self.autotuner_instance = None   # 存放當前開啟的 AutoTuner 實例
         # --- 動態渲染緩存 ---
         self.water_fade_history = {} # 用於實現尾跡效果 (可選)
         
@@ -1507,8 +1509,11 @@ class SimulationApp:
         return artists
 
     def open_autotuner(self):
+        if self.autotuner_instance and self.autotuner_instance.root.winfo_exists():
+            self.autotuner_instance.root.lift()
+            return
         tuner_window = tk.Toplevel(self.root)
-        AutoTunerGUI(tuner_window, main_app=self)
+        self.autotuner_instance = AutoTunerGUI(tuner_window, main_app=self)
 
     def on_closing(self):
         try:

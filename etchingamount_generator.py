@@ -117,7 +117,7 @@ class EtchingAmountGenerator:
             c_max = spin.get('rpm', 0) if spin.get('mode', 'Simple') == 'Simple' else max(spin.get('start_rpm', 0), spin.get('end_rpm', 0))
             if float(c_max) > max_rpm: max_rpm = float(c_max)
         
-        report_fps = max(30, min(1000, int(max_rpm * 0.5)))
+        report_fps = max(200, min(2000, int(max_rpm * 1.0)))
         recipe['dynamic_report_fps'] = report_fps
         dt = 1.0 / report_fps
 
@@ -327,15 +327,13 @@ class EtchingAmountGenerator:
         """
         快速物理模擬執行，不產生影片與中間結果。
         """
-        # 如果 recipe 中沒有指定 FPS，則根據轉速動態計算
-        if 'dynamic_report_fps' not in recipe:
-            max_rpm = 0
-            for proc in recipe['processes']:
-                spin = proc['spin_params']
-                c_max = spin['rpm'] if spin['mode'] == 'Simple' else max(spin['start_rpm'], spin['end_rpm'])
-                if c_max > max_rpm: max_rpm = c_max
-            # [優化] AutoTune 模式下，不需要過高的 FPS，降低 FPS 以加大 dt，加速模擬
-            recipe['dynamic_report_fps'] = max(30, min(1000, int(max_rpm * 0.5)))
+        # 根據轉速動態計算 FPS，確保與正式輸出一致
+        max_rpm = 0
+        for proc in recipe['processes']:
+            spin = proc['spin_params']
+            c_max = spin['rpm'] if spin['mode'] == 'Simple' else max(spin['start_rpm'], spin['end_rpm'])
+            if c_max > max_rpm: max_rpm = c_max
+        recipe['dynamic_report_fps'] = max(200, min(2000, int(max_rpm * 1.0)))
 
         headless_arms = {}
         for i, geo in ARM_GEOMETRIES.items():
