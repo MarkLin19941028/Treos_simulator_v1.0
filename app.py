@@ -32,6 +32,7 @@ from charging_generator import ChargingGenerator
 from moving_pattern import MovingPatternGenerator
 from simulation_config_def import PARAMETER_DEFINITIONS, get_default_config
 from AutoTuner import AutoTunerGUI
+from batch_export import BatchExportWindow
 
 class WaterColumn:
     def __init__(self, ax, flow_rate_ml_per_min):
@@ -348,10 +349,35 @@ class SimulationApp:
 
         io_frame = ttk.LabelFrame(content_frame, text="Export / Import Recipe", padding="10")
         io_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        # 連結到外部recipe_manager
-        ttk.Button(io_frame, text="Import Recipe", command=self.recipe_manager.import_recipe).pack(side="left", padx=5)
-        ttk.Button(io_frame, text="Export Recipe", command=self.recipe_manager.export_recipe).pack(side="left", padx=5)
         
+        # 建立與主程式對話框對接的匿名包裝函式
+        def handle_ui_import():
+            path = filedialog.askopenfilename(
+                filetypes=[("Recipe Files", "*.csv *.txt"), ("CSV Files", "*.csv"), ("Text Files", "*.txt"), ("All Files", "*.*")],
+                title="Import Recipe"
+            )
+            if path:
+                try:
+                    self.recipe_manager.import_recipe(path)
+                except Exception as ex:
+                    messagebox.showerror("Error", str(ex))
+
+        def handle_ui_export():
+            path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV Recipe Files", "*.csv"), ("All Files", "*.*")],
+                title="Export Recipe As..."
+            )
+            if path:
+                try:
+                    self.recipe_manager.export_recipe(path)
+                    # messagebox.showinfo("Success", "Recipe exported successfully!")
+                except Exception as ex:
+                    messagebox.showerror("Error", str(ex))
+
+        ttk.Button(io_frame, text="Import Recipe", command=handle_ui_import).pack(side="left", padx=5)
+        ttk.Button(io_frame, text="Export Recipe", command=handle_ui_export).pack(side="left", padx=5)
+
         self.current_recipe_file_var = tk.StringVar(value="No recipe imported")
         lbl_current_recipe = ttk.Label(io_frame, textvariable=self.current_recipe_file_var, foreground="gray")
         lbl_current_recipe.pack(side="left", padx=15)
@@ -367,6 +393,7 @@ class SimulationApp:
         # 第二列：進階分析與調校工具
         ttk.Button(report_frame, text="Accumulation Heatmap", width=16, command=self.export_accumulation_heatmap).grid(row=1, column=0, padx=5, pady=2, sticky="w")
         ttk.Button(report_frame, text="Advanced Function", width=16, command=self.open_autotuner).grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        ttk.Button(report_frame, text="Batch Export", width=16, command=self.open_batch_export).grid(row=1, column=2, padx=5, pady=2, sticky="w")
 
         global_frame = ttk.LabelFrame(content_frame, text="Global Parameters", padding="10")
         global_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
@@ -1514,6 +1541,10 @@ class SimulationApp:
             return
         tuner_window = tk.Toplevel(self.root)
         self.autotuner_instance = AutoTunerGUI(tuner_window, main_app=self)
+
+    def open_batch_export(self):
+        """開啟批量導出控制視窗"""
+        BatchExportWindow(self.root, self)
 
     def on_closing(self):
         try:
