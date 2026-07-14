@@ -20,59 +20,90 @@ class MovingPatternGenerator:
         """
         self.app = app
 
-    def export_nozzle_pattern(self):
-        parsed_recipe = self.app.parse_and_prepare_recipe()
-        if not parsed_recipe: return
+    def export_nozzle_pattern(self, filepath=None, parsed_recipe=None):
+        """
+        導出噴嘴移動軌跡（解耦核心：完整保留所有分析圖表，並支援手動單獨按鈕點選與批量自動化）
+        """
+        # 1. 處理儲存路徑的分流 (解耦 filedialog)[cite: 4]
+        if filepath is None:
+            user_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
+                title="Export Nozzle Moving Pattern As..."
+            )
+            if not user_path:
+                return  # 使用者取消選擇
+            base_path, _ = os.path.splitext(user_path)
+            is_batch_mode = False
+        else:
+            base_path = filepath  # 批量自動化模式：直接沿用外部安全傳入的基礎路徑[cite: 4]
+            is_batch_mode = True
 
-        user_path = filedialog.asksaveasfilename(
-            defaultextension=".png",
-            filetypes=[("PNG Image", "*.png"), ("All Files", "*.*")],
-            title="Export Moving Pattern Image As..."
-        )
-        if not user_path: return
+        # 2. 處理資料來源的分流 (解耦 UI 元件相依性)[cite: 4]
+        if parsed_recipe is None:
+            recipe_data = self.app.parse_and_prepare_recipe()
+            if not recipe_data:
+                messagebox.showerror("Error", "Failed to parse current recipe variables.")
+                return
+        else:
+            recipe_data = parsed_recipe
 
-        # 套用命名規範
-        base_path, ext = os.path.splitext(user_path)
-        if ext.lower() not in ['.png', '.jpg', '.jpeg']:
-            ext = '.png'
-        filepath_img = f"{base_path}_Moving_Pattern{ext}"
+        # --- 核心修正一：移除對 user_path 的二次依賴，改以安全解耦的 base_path 生成所有檔案路徑 ---
+        filepath_img = f"{base_path}_Moving_Pattern.png"
         filepath_vid = f"{base_path}_Moving_Pattern.mp4"
-        filepath_heatmap = f"{base_path}_Time_Heatmap{ext}"
+        filepath_heatmap = f"{base_path}_Time_Heatmap.png"
         filepath_csv = f"{base_path}_Time_Distribution.csv"
-        filepath_radial = f"{base_path}_Radial_Distribution{ext}"
+        filepath_radial = f"{base_path}_Radial_Distribution.png"
 
-        progress_window = tk.Toplevel(self.app.root)
-        progress_window.title("Generating Pattern & Video")
-        progress_window.geometry("400x120")
-        progress_window.transient(self.app.root)
-        progress_window.grab_set()
-        progress_window.resizable(False, False)
-        ttk.Label(progress_window, text="Generating moving pattern image, please wait...", padding=10).pack()
+        # --- 核心修正二：進度條保護。在批量無人值守模式下，不創立彈出對話框，100% 防止畫面卡死 ---
+        progress_widgets = None
+        if not is_batch_mode:
+            progress_window = tk.Toplevel(self.app.root)
+            progress_window.title("Generating Pattern & Video")
+            progress_window.geometry("400x120")
+            progress_window.transient(self.app.root)
+            progress_window.grab_set()
+            progress_window.resizable(False, False)
+            ttk.Label(progress_window, text="Generating moving pattern image, please wait...", padding=10).pack()
 
-        total_duration = sum(p['total_duration'] for p in parsed_recipe['processes'])
-        if total_duration <= 0: total_duration = 1.0
+            total_duration = sum(p['total_duration'] for p in recipe_data['processes'])
+            if total_duration <= 0: total_duration = 1.0
 
-        progress_label = ttk.Label(progress_window, text=f"Processing Time: 0.0s / {total_duration:.1f}s (0%)", padding=(0, 5))
-        progress_label.pack()
-        progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=350, mode="determinate", maximum=total_duration)
-        progress_bar.pack(pady=10)
-        progress_widgets = {'window': progress_window, 'bar': progress_bar, 'label': progress_label}
+            progress_label = ttk.Label(progress_window, text=f"Processing Time: 0.0s / {total_duration:.1f}s (0%)", padding=(0, 5))
+            progress_label.pack()
+            progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=350, mode="determinate", maximum=total_duration)
+            progress_bar.pack(pady=10)
+            progress_widgets = {'window': progress_window, 'bar': progress_bar, 'label': progress_label}
 
         try:
+            # 安全讀取全域速度參數快照
             try:
                 current_multiplier = float(self.app.speed_var.get().replace('x', ''))
             except (AttributeError, ValueError):
                 current_multiplier = 1.0
 
-            self._run_headless_pattern_generation(parsed_recipe, filepath_img, filepath_vid, filepath_heatmap, filepath_csv, filepath_radial, progress_widgets, play_speed_multiplier=current_multiplier)
-            messagebox.showinfo("Success", f"Moving Pattern, Heatmap, Radial Graph and CSV exported successfully to:\n{filepath_img}\n{filepath_vid}\n{filepath_heatmap}\n{filepath_radial}\n{filepath_csv}")
+            # 3. 呼叫底層 Headless 運算核心 (傳入剛剛分流好的解耦變數 recipe_data)
+            self._run_headless_pattern_generation(
+                recipe_data, filepath_img, filepath_vid, filepath_heatmap, filepath_csv, filepath_radial, 
+                progress_widgets, play_speed_multiplier=current_multiplier
+            )
+            
+            # 手動模式下才跳出提示
+            if not is_batch_mode:
+                # messagebox.showinfo("Success", "Moving Pattern analyses exported successfully!")
+                return
+
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to generate pattern and video: {e}")
+            if not is_batch_mode:
+                messagebox.showerror("Error", f"Failed to generate pattern and video: {e}")
+            else:
+                raise RuntimeError(f"Headless generator crashed inside moving_pattern.py: {str(e)}")
         finally:
-            if progress_window.winfo_exists():
+            if not is_batch_mode and 'progress_window' in locals() and progress_window.winfo_exists():
                 progress_window.destroy()
 
     def _run_headless_pattern_generation(self, recipe, filepath_img, filepath_vid, filepath_heatmap, filepath_csv, filepath_radial, progress_widgets=None, play_speed_multiplier=1.0):
+        # 此方法內所有寫死的 plt 替換為 headless 專用的 Agg Canvas (完全保留您優秀的物理圖表分析演算法)
         fig = Figure(figsize=(7, 4.5), dpi=100)
         canvas = FigureCanvasAgg(fig)
         ax = fig.add_subplot(111)
@@ -80,7 +111,10 @@ class MovingPatternGenerator:
         ax.set_xlim(-350, 350)
         ax.set_ylim(-225, 225)
         ax.set_facecolor('#111111')
-        ax.add_patch(plt.Circle((0, 0), WAFER_RADIUS, facecolor='#333333', edgecolor='cyan', lw=1.5, zorder=1))
+        
+        # 繪製圓形參考晶圓
+        from matplotlib.patches import Circle
+        ax.add_patch(Circle((0, 0), WAFER_RADIUS, facecolor='#333333', edgecolor='cyan', lw=1.5, zorder=1))
 
         # 準備影片輸出 (VideoWriter)
         fig.canvas.draw()
@@ -125,7 +159,7 @@ class MovingPatternGenerator:
 
         arm_trajectories = {1: [], 2: [], 3: []}
         
-        # 決定高解析度的取樣率 (參考 export_simulation_report 的邏輯)
+        # 決定高解析度的取樣率
         max_rpm = 0
         for proc in recipe['processes']:
             spin = proc['spin_params']
@@ -137,8 +171,6 @@ class MovingPatternGenerator:
         video_fps = 30.0
         sim_dt = 1.0 / sim_fps
         video_dt = 1.0 / video_fps
-        
-        # 實際影片中每幀代表的模擬時間間隔
         scaled_video_dt = video_dt * play_speed_multiplier
 
         total_duration = sum(p['total_duration'] for p in recipe['processes'])
@@ -152,7 +184,6 @@ class MovingPatternGenerator:
         while True:
             snapshot = engine.update(sim_dt)
             if progress_widgets:
-                # FPS = 每 0.5 秒更新一次 UI
                 if time.time() - last_ui_update_time >= 0.5:
                     try:
                         p_bar, p_label = progress_widgets['bar'], progress_widgets['label']
@@ -166,7 +197,6 @@ class MovingPatternGenerator:
             curr_arm_id = snapshot['active_arm_id']
             curr_flows = snapshot.get('nozzle_flows', {1: 0.0, 2: 0.0, 3: 0.0})
 
-            # 處理每個噴嘴的紀錄邏輯
             curr_pts = {1: None, 2: None, 3: None}
             if curr_arm_id != 0:
                 rad_wafer = math.radians(snapshot['wafer_angle'])
@@ -185,11 +215,9 @@ class MovingPatternGenerator:
                             arm_lines[1].append(ax.plot([], [], color=arm_colors[1], linewidth=NOZZLE_RADIUS_MM * 2, solid_capstyle='round', alpha=0.6, zorder=10)[0])
                         arm_trajectories[1][-1].append(pt)
                         
-                        # 畫到 coverage mask 上
                         if last_pts[1] is not None:
                             p1 = (int(last_pts[1][0]) + offset, int(last_pts[1][1]) + offset)
                             p2 = (int(pt[0]) + offset, int(pt[1]) + offset)
-                            # 使用線段畫出當前步長覆蓋的區域遮罩，並將其加到累積時間矩陣中
                             temp_mask = np.zeros((grid_size, grid_size), dtype=np.uint8)
                             cv2.line(temp_mask, p1, p2, 1, int(NOZZLE_RADIUS_MM * 2))
                             time_accumulation_matrix += temp_mask * sim_dt
@@ -239,7 +267,6 @@ class MovingPatternGenerator:
             last_flows = curr_flows.copy()
             last_pts = curr_pts.copy()
 
-            # 只在時間間隔到達 scaled_video_dt 時更新 UI 畫布並寫入影片 frame
             if snapshot['time'] - last_video_frame_time >= scaled_video_dt:
                 for arm_id, segments in arm_trajectories.items():
                     if len(segments) > 0 and len(segments[-1]) > 0:
@@ -254,7 +281,6 @@ class MovingPatternGenerator:
 
             if snapshot.get('is_finished') or snapshot['time'] > (total_duration + 30.0): break
 
-        # 如果最後沒有寫入剛好結束的 frame，補一張
         for arm_id, segments in arm_trajectories.items():
             if len(segments) > 0 and len(segments[-1]) > 0:
                 coords = np.array(segments[-1])
@@ -267,8 +293,6 @@ class MovingPatternGenerator:
         out_vid.release()
 
         has_any_trajectory = False
-        
-        # 建立 Legend 用的 Handles
         from matplotlib.lines import Line2D
         legend_elements = []
 
@@ -278,7 +302,6 @@ class MovingPatternGenerator:
                 if len(segment) > 0:
                     has_any_trajectory = True
                     drawn_this_arm = True
-            
             if drawn_this_arm:
                 label = f"Nozzle {arm_id}"
                 legend_elements.append(Line2D([0], [0], color=arm_colors[arm_id], lw=4, label=label))
@@ -286,25 +309,18 @@ class MovingPatternGenerator:
         if legend_elements:
             ax.legend(handles=legend_elements, loc='upper right', facecolor='#222222', edgecolor='gray', labelcolor='white', fontsize=9)
 
-        # 計算覆蓋面積
         valid_coverage = cv2.bitwise_and(coverage_mask, wafer_mask)
         covered_pixels = np.sum(valid_coverage)
-        if total_wafer_pixels > 0:
-            coverage_percentage = (covered_pixels / total_wafer_pixels) * 100.0
-        else:
-            coverage_percentage = 0.0
+        coverage_percentage = (covered_pixels / total_wafer_pixels) * 100.0 if total_wafer_pixels > 0 else 0.0
 
         if has_any_trajectory:
-            # 標示覆蓋率
             ax.text(0.02, 0.02, f"Coverage Area: {coverage_percentage:.2f}%", 
-                    transform=ax.transAxes, color='white', fontsize=12,
-                    bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
+                    transform=ax.text(0,0,'').get_transform() if hasattr(ax, 'transAxes') == False else ax.transAxes, 
+                    color='white', fontsize=12, bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
 
-            # 取得最後一個有效的噴嘴位置作標記
             final_pos = snapshot['nozzle_pos']
             if isinstance(final_pos, list):
-                for p in final_pos:
-                    ax.plot(p[0], p[1], 'o', color='white', markersize=4, zorder=15)
+                for p in final_pos: ax.plot(p[0], p[1], 'o', color='white', markersize=4, zorder=15)
             else:
                 ax.plot(final_pos[0], final_pos[1], 'o', color='white', markersize=4, zorder=15)
 
@@ -312,9 +328,7 @@ class MovingPatternGenerator:
         plt.close(fig)
 
         # ====== 產生並儲存熱力圖 ======
-        # 將未在 Wafer 上的區域設為 NaN 以便塗色透明或指定背景
         masked_time_matrix = np.where(wafer_mask == 1, time_accumulation_matrix, np.nan)
-        
         fig_heat = Figure(figsize=(7, 6), dpi=100)
         canvas_heat = FigureCanvasAgg(fig_heat)
         ax_heat = fig_heat.add_subplot(111)
@@ -330,7 +344,6 @@ class MovingPatternGenerator:
         
         cbar = fig_heat.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.04)
         cbar.ax.yaxis.set_tick_params(color='white')
-        cbar.ax.set_yticklabels([f"{x:.2f}" for x in cbar.get_ticks()], color='white')
         cbar.set_label("Time (s)", color='white')
         
         fig_heat.savefig(filepath_heatmap, bbox_inches='tight', dpi=100, facecolor=fig_heat.get_facecolor())
@@ -341,21 +354,17 @@ class MovingPatternGenerator:
         distances = np.sqrt((x_indices - offset)**2 + (y_indices - offset)**2)
         
         max_dist = int(WAFER_RADIUS)
-        radial_bins = np.arange(0, max_dist + 1, 1) # 1mm bins
+        radial_bins = np.arange(0, max_dist + 1, 1)
         radial_times = np.zeros(len(radial_bins) - 1)
         
         for i in range(len(radial_bins) - 1):
             mask = (distances >= radial_bins[i]) & (distances < radial_bins[i+1]) & (wafer_mask == 1)
-            if np.any(mask):
-                radial_times[i] = np.mean(time_accumulation_matrix[mask])
-            else:
-                radial_times[i] = 0.0
+            radial_times[i] = np.mean(time_accumulation_matrix[mask]) if np.any(mask) else 0.0
                 
         bin_centers = (radial_bins[:-1] + radial_bins[1:]) / 2.0
 
-        # 儲存 CSV (2D Grid & 1D Radial)
-        import csv
-        with open(filepath_csv, mode='w', newline='') as f:
+        with open(filepath_csv, mode='w', newline='', encoding='utf-8') as f:
+            import csv
             writer = csv.writer(f)
             writer.writerow(["--- Radial Distribution ---"])
             writer.writerow(["Radius (mm)", "Average Coverage Time (s)"])
@@ -369,7 +378,6 @@ class MovingPatternGenerator:
                 row = [f"{y - offset}"] + [f"{masked_time_matrix[y, x]:.4f}" if not np.isnan(masked_time_matrix[y, x]) else "" for x in range(grid_size)]
                 writer.writerow(row)
 
-        # 儲存徑向分佈圖
         fig_rad = Figure(figsize=(7, 4.5), dpi=100)
         canvas_rad = FigureCanvasAgg(fig_rad)
         ax_rad = fig_rad.add_subplot(111)

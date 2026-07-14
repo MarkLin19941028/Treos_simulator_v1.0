@@ -5,6 +5,11 @@ import threading
 import time
 import csv
 
+# 建立完全執行緒安全的虛擬視窗 Mock 物件，阻斷底層引擎的 GUI 刷新
+class HeadlessMockWindow:
+    def update_idletasks(self): pass
+    def update(self): pass
+
 class BatchExportWindow:
     def __init__(self, parent, main_app):
         self.parent = parent
@@ -16,8 +21,9 @@ class BatchExportWindow:
         self.is_running = False
         self.cancel_requested = False
         
-        # 批次排隊處理索引
-        self.current_index = 0
+        # 儲存背景運算需要的同步共享容器
+        self.current_parsed_recipe = None
+        self.current_config = None
         
         # 輸出的項目勾選變數
         self.chk_report = tk.BooleanVar(value=True)
@@ -62,7 +68,7 @@ class BatchExportWindow:
         
         ttk.Checkbutton(content_frame, text="Simulation Report (.csv)", variable=self.chk_report).grid(row=0, column=0, sticky="w", padx=10, pady=5)
         ttk.Checkbutton(content_frame, text="Generate Video (.mp4)", variable=self.chk_video).grid(row=0, column=1, sticky="w", padx=10, pady=5)
-        ttk.Checkbutton(content_frame, text="Moving Pattern (.csv)", variable=self.chk_pattern).grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ttk.Checkbutton(content_frame, text="Moving Pattern (.csv, .png, .mp4)", variable=self.chk_pattern).grid(row=1, column=0, sticky="w", padx=10, pady=5)
         ttk.Checkbutton(content_frame, text="Accumulation Heatmap (.png)", variable=self.chk_heatmap).grid(row=1, column=1, sticky="w", padx=10, pady=5)
         
         # 4. 進度顯示與控制區塊
@@ -82,11 +88,13 @@ class BatchExportWindow:
         self.txt_log.pack(fill="both", expand=True)
 
     def log(self, message):
-        """主執行緒安全的直接 Log 記錄"""
-        self.txt_log.config(state="normal")
-        self.txt_log.insert(tk.END, message + "\n")
-        self.txt_log.see(tk.END)
-        self.txt_log.config(state="disabled")
+        """執行緒安全的 Log 印出工具"""
+        def safe_log():
+            self.txt_log.config(state="normal")
+            self.txt_log.insert(tk.END, message + "\n")
+            self.txt_log.see(tk.END)
+            self.txt_log.config(state="disabled")
+        self.window.after(0, safe_log)
 
     def browse_recipes(self):
         files = filedialog.askopenfilenames(
@@ -112,7 +120,6 @@ class BatchExportWindow:
 
     def toggle_batch_process(self):
         if not self.is_running:
-            # 驗證輸入條件
             if not self.recipe_paths:
                 messagebox.showwarning("Warning", "Please select at least one recipe file.")
                 return
@@ -123,7 +130,7 @@ class BatchExportWindow:
                 messagebox.showwarning("Warning", "Please check at least one content item to export.")
                 return
             
-            # 緩存主前台勾選參數
+            # 提前在主執行緒將所需的全域 GUI 參數讀出
             try:
                 if hasattr(self.main_app, 'speed_var') and self.main_app.speed_var:
                     self.speed_multiplier = float(self.main_app.speed_var.get().replace('x', ''))
@@ -144,172 +151,164 @@ class BatchExportWindow:
             self.btn_action.config(text="Cancel")
             self.lock_ui_inputs(True)
             
-            # 初始化進度條
             self.progress_bar["maximum"] = len(self.recipe_paths)
             self.progress_bar["value"] = 0
-            self.current_index = 0
             
-            # 核心修正：利用 Tkinter after 事件鏈，一條龍在主執行緒安全執行分析，絕不閃退
-            self.window.after(100, self.process_next_recipe)
+            self.worker_thread = threading.Thread(target=self.execute_batch_export, daemon=True)
+            self.worker_thread.start()
         else:
             if messagebox.askyesno("Confirm", "Are you sure you want to cancel the batch process?"):
                 self.cancel_requested = True
                 self.lbl_status.config(text="Status: Canceling...", foreground="orange")
+                self.log("[Interrupt] Cancellation requested by user. Terminating loop...")
 
     def lock_ui_inputs(self, lock=True):
         state = "disabled" if lock else "normal"
         self.btn_select_recipes.config(state=state)
         self.btn_select_dir.config(state=state)
 
-    def process_next_recipe(self):
-        """一條龍在 Tkinter Main Thread 內調用外部 Generator 的核心方法"""
+    def execute_batch_export(self):
         total_recipes = len(self.recipe_paths)
-        
-        # 檢查是否取消或結束
-        if self.cancel_requested or self.current_index >= total_recipes:
-            self.finish_batch_export()
-            return
-            
-        path = self.recipe_paths[self.current_index]
-        filename = os.path.basename(path)
-        base_name, _ = os.path.splitext(filename)
         out_dir = self.target_dir
         
-        self.lbl_status.config(text=f"Processing ({self.current_index + 1}/{total_recipes}): {filename}", foreground="blue")
-        self.log(f"\n[Start] ({self.current_index + 1}/{total_recipes}) Running: {filename}")
-        
-        try:
-            # 1. 載入配方並解析變數
-            self.main_app.recipe_manager.import_recipe(path)
-            parsed_recipe = self.main_app.parse_and_prepare_recipe()
-            current_config = self.main_app.get_current_config()
-            
-            if not parsed_recipe:
-                self.log(f"[Error] Failed to parse recipe structure for: {filename}")
-                self.next_loop()
-                return
-
-            # 2. 建立前台進度條的本地對接存根 (此時因為在主執行緒，可以安全刷新)
-            widgets = {
-                'window': self.window,
-                'bar': self.progress_bar,
-                'label': self.lbl_status
-            }
-
-            # ---- 調用你現有的擴充 Generator 進行數據處理 ----
-            
-            # A. Simulation Report
-            if self.run_report and not self.cancel_requested:
-                self.log(f" > Running simulation report...")
-                max_rpm = max([p['spin_params']['rpm'] if p['spin_params']['mode'] == 'Simple' else max(p['spin_params']['start_rpm'], p['spin_params']['end_rpm']) for p in parsed_recipe['processes']])
-                parsed_recipe['dynamic_report_fps'] = max(800, int(max_rpm * 4))
+        for idx, path in enumerate(self.recipe_paths):
+            if self.cancel_requested:
+                break
                 
-                report_data, particle_data, _ = self.main_app._run_headless_simulation(parsed_recipe, progress_widgets=None)
-                if report_data:
-                    rep_path = os.path.join(out_dir, f"{base_name}_Simulation_Report.csv")
-                    with open(rep_path, 'w', newline='', encoding='utf-8') as f:
-                        w = csv.DictWriter(f, fieldnames=report_data[0].keys())
-                        w.writeheader()
-                        w.writerows(report_data)
-                if particle_data:
-                    part_path = os.path.join(out_dir, f"{base_name}_Particle_Calculation.csv")
-                    processed_part = []
-                    for p in particle_data:
-                        if p['time_on_wafer'] > 0:
-                            processed_part.append({
-                                'Particle ID': p['id'],
-                                'Residence Time (s)': f"{p['time_on_wafer']:.4f}",
-                                'Path Length (mm)': f"{p['path_length']:.4f}",
-                                'Average Velocity (mm/s)': f"{(p['path_length'] / p['time_on_wafer']):.4f}"
-                                })
-                    with open(part_path, 'w', newline='', encoding='utf-8') as f:
-                        w = csv.DictWriter(f, fieldnames=['Particle ID', 'Residence Time (s)', 'Path Length (mm)', 'Average Velocity (mm/s)'])
-                        w.writeheader()
-                        w.writerows(processed_part)
-
-            # B. Generate Video (安全調用你的 video_generator.py)
-            if self.run_video and not self.cancel_requested:
-                self.log(f" > Running video_generator.py...")
-                vid_path = os.path.join(out_dir, f"{base_name}_Simulation_Video.mp4")
-                self.main_app.video_generator._run_headless_video_generation(
-                    parsed_recipe, vid_path, progress_widgets=widgets,
-                    play_speed_multiplier=self.speed_multiplier, config=current_config
-                )
-
-            # C. Moving Pattern (安全調用你的 moving_pattern.py)
-            if self.run_pattern and not self.cancel_requested:
-                self.log(f" > Running moving_pattern.py...")
-                pat_path = os.path.join(out_dir, f"{base_name}_Moving_Pattern.csv")
-                if hasattr(self.main_app.moving_pattern_generator, 'generate_headless'):
-                    self.main_app.moving_pattern_generator.generate_headless(parsed_recipe, pat_path)
-                elif hasattr(self.main_app.moving_pattern_generator, 'export_nozzle_pattern'):
-                    # 如果原先是透過手動選擇存檔，這處可能需要你確認外部檔案是否有接收指定路徑的參數
+            filename = os.path.basename(path)
+            base_name, _ = os.path.splitext(filename)
+            
+            self.window.after(0, lambda f=filename, i=idx: self.lbl_status.config(
+                text=f"Processing ({i+1}/{total_recipes}): {f}", foreground="blue"
+            ))
+            self.log(f"\n[Start] ({idx+1}/{total_recipes}) Processing: {filename}")
+            
+            try:
+                # 1. 同步加載配方檔案到 UI 變數快照中 (交給主執行緒安全執行)[cite: 4]
+                evt = threading.Event()
+                def safe_gui_load_and_parse():
                     try:
-                        self.main_app.moving_pattern_generator.export_nozzle_pattern(filepath=pat_path)
-                    except TypeError:
-                        self.export_nozzle_pattern_headless(parsed_recipe, pat_path)
-                else:
-                    self.export_nozzle_pattern_headless(parsed_recipe, pat_path)
-
-            # D. Accumulation Heatmap (安全調用你的 accu_heatmap_generator.py)
-            if self.run_heatmap and not self.cancel_requested:
-                self.log(f" > Running accu_heatmap_generator.py...")
-                hmp_path = os.path.join(out_dir, f"{base_name}_Accumulation_Heatmap.png")
-                max_rpm = max([p['spin_params']['rpm'] if p['spin_params']['mode'] == 'Simple' else max(p['spin_params']['start_rpm'], p['spin_params']['end_rpm']) for p in parsed_recipe['processes']])
-                parsed_recipe['dynamic_report_fps'] = max(800, int(max_rpm * 4))
+                        self.main_app.recipe_manager.import_recipe(path)
+                        self.current_parsed_recipe = self.main_app.parse_and_prepare_recipe()
+                        self.current_config = self.main_app.get_current_config()
+                    finally:
+                        evt.set()
                 
-                from accu_heatmap_generator import AccuHeatmapGenerator
-                generator = AccuHeatmapGenerator(self.main_app)
-                generator.generate(
-                    recipe=parsed_recipe, 
-                    filepath=hmp_path, 
-                    config=current_config, 
-                    progress_widgets=widgets
-                )
+                self.window.after(0, safe_gui_load_and_parse)
+                evt.wait()  # 阻塞背景，確保主執行緒快照完畢[cite: 4]
+                
+                parsed_recipe = self.current_parsed_recipe
+                current_config = self.current_config
+                
+                if not parsed_recipe:
+                    self.log(f"[Error] Failed to parse recipe variables for: {filename}")
+                    continue
+                
+                mock_win = HeadlessMockWindow()
+                dummy_widgets = {
+                    'window': mock_win,
+                    'bar': type('DummyBar', (object,), {'__setitem__': lambda s, k, v: None, 'get': lambda s, k: 0.0})(),
+                    'label': type('DummyLabel', (object,), {'config': lambda s, **kw: None})()
+                }
 
-            self.log(f"[Success] Completed export for: {filename}")
+                # ---- 執行導出項目 ----
+                
+                # A. Simulation Report
+                if self.run_report and not self.cancel_requested:
+                    self.log(f" > Exporting Simulation Report (.csv)...")
+                    max_rpm = max([p['spin_params']['rpm'] if p['spin_params']['mode'] == 'Simple' else max(p['spin_params']['start_rpm'], p['spin_params']['end_rpm']) for p in parsed_recipe['processes']])
+                    parsed_recipe['dynamic_report_fps'] = max(800, int(max_rpm * 4))
+                    
+                    report_data, particle_data, _ = self.main_app._run_headless_simulation(parsed_recipe, progress_widgets=None)
+                    
+                    if report_data:
+                        rep_path = os.path.join(out_dir, f"{base_name}_Simulation_Report.csv")
+                        with open(rep_path, 'w', newline='', encoding='utf-8') as f:
+                            w = csv.DictWriter(f, fieldnames=report_data[0].keys())
+                            w.writeheader()
+                            w.writerows(report_data)
+                    if particle_data:
+                        part_path = os.path.join(out_dir, f"{base_name}_Particle_Calculation.csv")
+                        processed_part = []
+                        for p in particle_data:
+                            if p['time_on_wafer'] > 0:
+                                processed_part.append({
+                                    'Particle ID': p['id'],
+                                    'Residence Time (s)': f"{p['time_on_wafer']:.4f}",
+                                    'Path Length (mm)': f"{p['path_length']:.4f}",
+                                    'Average Velocity (mm/s)': f"{(p['path_length'] / p['time_on_wafer']):.4f}"
+                                })
+                        with open(part_path, 'w', newline='', encoding='utf-8') as f:
+                            w = csv.DictWriter(f, fieldnames=['Particle ID', 'Residence Time (s)', 'Path Length (mm)', 'Average Velocity (mm/s)'])
+                            w.writeheader()
+                            w.writerows(processed_part)
+
+                # B. Generate Video
+                if self.run_video and not self.cancel_requested:
+                    self.log(f" > Calling video_generator.py (.mp4)...")
+                    vid_path = os.path.join(out_dir, f"{base_name}_Simulation_Video.mp4")
+                    
+                    self.main_app.video_generator._run_headless_video_generation(
+                        parsed_recipe, vid_path, progress_widgets=dummy_widgets,
+                        play_speed_multiplier=self.speed_multiplier, config=current_config
+                    )
+
+                # C. Moving Pattern (核心修正：直接調用已解耦優化後的外部方法，100% 完整產出所有圖表)[cite: 4]
+                if self.run_pattern and not self.cancel_requested:
+                    self.log(f" > Calling moving_pattern.py (CSV, PNG graphs, MP4)...")
+                    pat_path_base = os.path.join(out_dir, base_name)
+                    
+                    evt_pattern = threading.Event()
+                    def safe_pattern_export():
+                        try:
+                            # 傳入快照後的純數據結構與指定基礎路徑，完美跨平台解耦！[cite: 4]
+                            self.main_app.moving_pattern_generator.export_nozzle_pattern(
+                                filepath=pat_path_base, 
+                                parsed_recipe=parsed_recipe
+                            )
+                        except Exception as ex:
+                            self.log(f"   >> [Pattern Export Failed] {str(ex)}")
+                        finally:
+                            evt_pattern.set()
+                            
+                    self.window.after(0, safe_pattern_export)
+                    evt_pattern.wait()
+
+                # D. Accumulation Heatmap
+                if self.run_heatmap and not self.cancel_requested:
+                    self.log(f" > Calling accu_heatmap_generator.py...")
+                    hmp_path = os.path.join(out_dir, f"{base_name}_Accumulation_Heatmap.png")
+                    
+                    max_rpm = max([p['spin_params']['rpm'] if p['spin_params']['mode'] == 'Simple' else max(p['spin_params']['start_rpm'], p['spin_params']['end_rpm']) for p in parsed_recipe['processes']])
+                    parsed_recipe['dynamic_report_fps'] = max(800, int(max_rpm * 4))
+                    
+                    from accu_heatmap_generator import AccuHeatmapGenerator
+                    generator = AccuHeatmapGenerator(self.main_app)
+                    generator.generate(
+                        recipe=parsed_recipe, 
+                        filepath=hmp_path, 
+                        config=current_config, 
+                        progress_widgets=dummy_widgets
+                    )
+
+                self.log(f"[Success] Completed export for: {filename}")
+                
+            except Exception as e:
+                self.log(f"[Error] Failed on {filename}: {str(e)}")
             
-        except Exception as e:
-            self.log(f"[Error Exception] Failed on {filename}: {str(e)}")
-            
-        self.next_loop()
+            # 更新進度條
+            self.window.after(0, lambda i=idx: self.progress_bar.configure(value=i + 1))
 
-    def next_loop(self):
-        """遞增索引並排定下一個非同步任務"""
-        self.current_index += 1
-        self.progress_bar["value"] = self.current_index
-        # 10 毫秒後在主執行緒調用下一個配方，讓 Tkinter 有時間刷新視窗畫面而不當機
-        self.window.after(10, self.process_next_recipe)
-
-    def finish_batch_export(self):
-        """結束導出後的 UI 重置復原"""
-        self.is_running = False
-        self.lock_ui_inputs(False)
-        self.btn_action.config(text="Start Batch Export")
-        
-        if self.cancel_requested:
-            self.lbl_status.config(text="Status: Cancelled", foreground="red")
-            self.log("\n[Terminated] Batch process was aborted by user.")
-            messagebox.showwarning("Cancelled", "Batch export has been cancelled.")
-        else:
-            self.lbl_status.config(text="Status: Finished All", foreground="green")
-            self.log("\n[Success] All tasks completed successfully.")
-            messagebox.showinfo("Finished", f"Successfully processed all recipes!")
-
-    def export_nozzle_pattern_headless(self, parsed_recipe, filepath):
-        """Headless 移動路徑本地導出版 (降級備用備份)"""
-        try:
-            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(['Process Step', 'Time Point (s)', 'Nozzle Position (%)', 'Arm ID'])
-                for i, proc in enumerate(parsed_recipe['processes']):
-                    arm_id = proc['arm_id']
-                    if arm_id == 0: continue
-                    total_t = proc['total_duration']
-                    steps = proc['steps']
-                    if not steps: continue
-                    dt = total_t / len(steps)
-                    for j, step in enumerate(steps):
-                        writer.writerow([i + 1, f"{(j * dt):.2f}", step['pos'], arm_id])
-        except Exception as e:
-            self.log(f"   >> [Pattern Backup Save Error] {str(e)}")
+        # 批次結束後的 UI 復原
+        def batch_finished_ui():
+            self.is_running = False
+            self.lock_ui_inputs(False)
+            self.btn_action.config(text="Start Batch Export")
+            if self.cancel_requested:
+                self.lbl_status.config(text="Status: Cancelled", foreground="red")
+                messagebox.showwarning("Cancelled", "Batch export was cancelled.")
+            else:
+                self.lbl_status.config(text="Status: Finished All", foreground="green")
+                # messagebox.showinfo("Finished", f"Successfully processed {total_recipes} recipes!")
+                
+        self.window.after(0, batch_finished_ui)

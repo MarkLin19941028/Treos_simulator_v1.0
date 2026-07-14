@@ -1,6 +1,11 @@
 import numpy as np
 import math
 import os
+import threading
+# --- 新增這兩行：強制 Matplotlib 在背景執行緒中使用無 GUI 的 Agg 後端 ---
+import matplotlib
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import tkinter as tk
 from tkinter import messagebox
@@ -171,12 +176,12 @@ class AccuHeatmapGenerator:
         heatmap_csv_path = f"{real_base}_Accumulation_RawData.csv"
         radial_png_path = f"{real_base}_Accumulation_Radial_Distribution.png"
 
-        # 轉置矩陣以符合視覺慣例 (通常 histogram2d 的 x,y 與影像的 row,col 是轉置關係)
-        # 這裡與原程式碼邏輯保持一致
+        # 轉置矩陣以符合視覺慣例 (與原程式碼邏輯保持一致)
         data = heatmap_matrix.T 
         
         grid_dim = int(np.sqrt(data.size))
-        if data.ndim == 1: data = data.reshape((grid_dim, grid_dim))
+        if data.ndim == 1: 
+            data = data.reshape((grid_dim, grid_dim))
             
         if data.size > 0:
             h_max = np.max(data)
@@ -185,7 +190,10 @@ class AccuHeatmapGenerator:
         else:
             h_max = h_median = h_std = 0.0
 
-        # 繪圖部分 (Matplotlib 操作不適合 Numba，維持原樣)
+        # --- 1. 計算並輸出 1.0mm Bin Size 的 Radial Distribution 圖片並取得數據 ---
+        bin_centers, radial_avg = self._export_accumulation_radial_distribution(heatmap_matrix, radial_png_path)
+
+        # 繪圖部分 (維持原樣)
         plt.figure(figsize=(11, 9), dpi=120)
         im = plt.imshow(data, origin='lower', extent=[-150, 150, -150, 150], cmap='magma', interpolation='nearest')
         cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
@@ -210,28 +218,47 @@ class AccuHeatmapGenerator:
             print(f"Error saving image: {e}")
         plt.close()
 
+        # --- 2. 寫入 CSV 檔案 (將 Radial Distribution 放在 Heatmap 上方) ---
         try:
-            np.savetxt(heatmap_csv_path, data, delimiter=",", fmt='%.6f', 
-                       header="Raw Accumulation Data (Seconds), Resolution: 1.0mm/pixel, Range: -150 to 150 mm")
+            with open(heatmap_csv_path, 'w', encoding='utf-8') as f:
+                # 寫入第一部分：Radial Distribution 的 Metadata 與數據
+                f.write("# === Section 1: Radial Accumulation Distribution (Bin Size: 1.0mm) ===\n")
+                f.write("Radius (mm),Average Accumulation Time (s)\n")
+                for r_val, avg_val in zip(bin_centers, radial_avg):
+                    f.write(f"{r_val:.1f},{avg_val:.6f}\n")
+                
+                # 寫入空行以做為區隔
+                f.write("\n")
+                
+                # 寫入第二部分：2D Heatmap Grid
+                f.write("# === Section 2: 2D Wafer Accumulation Heatmap (Seconds) ===\n")
+                f.write("# Resolution: 1.0mm/pixel, Range: -150 to 150 mm (Grid Size: 300x300)\n")
+                
+                # 逐列寫入矩陣數據 (每列含有 300 個以逗號分隔的數值)
+                for row in data:
+                    f.write(",".join(f"{val:.6f}" for val in row) + "\n")
+                    
+            print(f"Successfully saved merged data to {heatmap_csv_path}")
         except Exception as e:
-            print(f"Failed to write heatmap raw data to CSV: {e}")
-        
-        self._export_accumulation_radial_distribution(heatmap_matrix, radial_png_path)
+            print(f"Failed to write merged data to CSV: {e}")
         
     def _export_accumulation_radial_distribution(self, matrix, filepath):
         """
         計算並輸出隨半徑變化的累積時間分佈圖 (Radial Distribution)
+        Bin Size 已修改為 1.0mm
         """
         grid_size = matrix.shape[0]
         center = grid_size / 2.0
         
         y, x = np.indices(matrix.shape)
+        # 計算每個網格中心點到晶圓中心的實際物理距離 (1 pixel = 1mm)
         r = np.sqrt((x - center + 0.5)**2 + (y - center + 0.5)**2)
         
-        bin_size = 3.0
+        # 1. 將 Bin Size 設定為 1.0 mm (原為 3.0)
+        bin_size = 1.0
         r_binned = (r // bin_size).astype(int)
-        max_r = float(WAFER_RADIUS)
-        max_bin = int(max_r // bin_size)
+        max_r = float(WAFER_RADIUS)         # 150.0 mm
+        max_bin = int(max_r // bin_size)    # 150 bins
         
         radial_sum = np.zeros(max_bin + 1)
         radial_count = np.zeros(max_bin + 1)
@@ -242,20 +269,28 @@ class AccuHeatmapGenerator:
         
         radial_avg = np.divide(radial_sum, radial_count, out=np.zeros_like(radial_sum), where=radial_count > 0)
         
+        # 計算每個 Bin 的中心半徑位置 (例如 0.5mm, 1.5mm ... 149.5mm)
         bin_centers = np.arange(max_bin + 1) * bin_size + (bin_size / 2.0)
         
+        # 繪圖部分
         plt.figure(figsize=(10, 6), dpi=100)
         plt.plot(bin_centers, radial_avg, color='red', linewidth=2, label='Average Accumulation')
         plt.fill_between(bin_centers, radial_avg, alpha=0.2, color='red')
         
-        plt.title("Radial Accumulation Distribution", fontsize=14, pad=15)
+        plt.title("Radial Accumulation Distribution (1.0mm Bin)", fontsize=14, pad=15)
         plt.xlabel("Radius (mm)", fontsize=12)
         plt.ylabel("Average Accumulation Time (s)", fontsize=12)
         plt.xlim(0, max_r)
-        plt.xticks(np.arange(0, max_r + 1, 15)) # Ticks every 15mm for better visibility
+        plt.xticks(np.arange(0, max_r + 1, 15)) # 每 15mm 一個刻度
         plt.ylim(0, np.max(radial_avg) * 1.1 if np.max(radial_avg) > 0 else 1.0)
         plt.grid(True, linestyle='--', alpha=0.7)
 
         plt.tight_layout()
-        plt.savefig(filepath, bbox_inches='tight', dpi=300)
+        try:
+            plt.savefig(filepath, bbox_inches='tight', dpi=300)
+        except Exception as e:
+            print(f"Error saving radial distribution image: {e}")
         plt.close()
+
+        # 回傳計算好的一維數據供 CSV 導出時使用
+        return bin_centers, radial_avg
